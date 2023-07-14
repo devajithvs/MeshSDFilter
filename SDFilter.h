@@ -351,10 +351,10 @@ protected:
 			return false;
 		}
 
-		Timer::EventID preprocess_end_time = timer.get_time();
 
 		std::cout << "Filtering......" << std::endl;
 
+		Timer::EventID preprocess_end_time = timer.get_time();
 		fixedpoint_solver(param);
 
 		Timer::EventID filter_end_time = timer.get_time();

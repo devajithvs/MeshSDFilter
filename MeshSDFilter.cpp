@@ -55,6 +55,7 @@ int main(int argc, char **argv)
     }
 
 	#ifdef USE_OPENMP
+    std::cerr << "Using OPENMP" << std::endl;
     Eigen::initParallel();
 	#endif
 
