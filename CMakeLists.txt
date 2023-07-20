@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.1)
 
-project(SDFilter)
+project(SDFilter LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +33,7 @@ if(OPENMP)
   find_package(OpenMP QUIET)
   if(OPENMP_FOUND)
       message("OpenMP found. OpenMP activated in release.")
-      add_definitions(-DUSE_OPENMP)
+      # add_definitions(-DUSE_OPENMP)
 
   else()
       message("OpenMP not found.")
@@ -76,7 +76,7 @@ add_executable(MeshSDFilter
   MeshTypes.h
   SDFilter.h
   MeshNormalFilter.h
-  MeshSDFilter.cpp
+  MeshSDFilter.cu
 )
 target_link_libraries(MeshSDFilter MeshSDLibrary)
 
@@ -88,10 +88,15 @@ add_executable(MeshDenoiser
   SDFilter.h
   MeshNormalFilter.h
   MeshNormalDenoising.h
-  MeshDenoiser.cpp
+  MeshDenoiser.cu
 )
 target_link_libraries(MeshDenoiser MeshSDLibrary)
 
+
+set_target_properties(
+    MeshSDFilter
+    PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON)
 
 if(OPENMP_FOUND)
   #target_compile_options(MeshSDLibrary PUBLIC "$<$<CONFIG:RELEASE>:${OpenMP_CXX_FLAGS}>")
