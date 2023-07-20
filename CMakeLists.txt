@@ -78,7 +78,7 @@ add_executable(MeshSDFilter
   MeshNormalFilter.h
   MeshSDFilter.cpp
 )
-target_link_libraries(MeshSDFilter MeshSDLibrary)
+target_link_libraries(MeshSDFilter MeshSDLibrary -lstdc++ -lm)
 
 
 # Executable for denoising
@@ -90,7 +90,7 @@ add_executable(MeshDenoiser
   MeshNormalDenoising.h
   MeshDenoiser.cpp
 )
-target_link_libraries(MeshDenoiser MeshSDLibrary)
+target_link_libraries(MeshDenoiser MeshSDLibrary -lstdc++ -lm)
 
 
 if(OPENMP_FOUND)
