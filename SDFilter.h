@@ -41,6 +41,7 @@
 #include <queue>
 #include <set>
 #include <utility>
+#include <vector>
 
 #ifdef USE_OPENMP
 #include <omp.h>
@@ -540,12 +541,34 @@ protected:
                                 Eigen::VectorXd &area_weights) = 0;
 
   bool initialize_filter(Parameters &param) {
-    // Retrive input signals and their area weights
+    // Retrieve input signals and their area weights
     Eigen::MatrixXd guidance, init_signals;
     get_initial_data(guidance, init_signals, area_weights_);
 
-    signal_dim_ = init_signals.rows();
-    signal_count_ = init_signals.cols();
+    // Convert Eigen matrices to C++ vectors
+    std::vector<std::vector<double>> d_guidance(
+        guidance.rows(), std::vector<double>(guidance.cols()));
+    std::vector<std::vector<double>> d_init_signals(
+        init_signals.rows(), std::vector<double>(init_signals.cols()));
+    std::vector<double> d_area_weights(
+        area_weights_.data(), area_weights_.data() + area_weights_.size());
+
+    std::cerr << "Before initialize" << std::endl;
+    // Copy elements from Eigen::MatrixXd to C++ vectors
+    for (int i = 0; i < guidance.rows(); ++i) {
+      for (int j = 0; j < guidance.cols(); ++j) {
+        d_guidance[i][j] = guidance(i, j);
+      }
+    }
+
+    for (int i = 0; i < init_signals.rows(); ++i) {
+      for (int j = 0; j < init_signals.cols(); ++j) {
+        d_init_signals[i][j] = init_signals(i, j);
+      }
+    }
+
+    signal_dim_ = d_init_signals.size();
+    signal_count_ = d_init_signals[0].size();
     if (signal_count_ <= 0) {
       return false;
     }
@@ -566,9 +589,21 @@ protected:
       return false;
     }
 
-    // Pre-compute filtering weights, and rescale the lambda parameter
+    std::vector<std::vector<Eigen::Index>> d_neighboring_pairs(
+        neighboring_pairs_.rows(),
+        std::vector<Eigen::Index>(neighboring_pairs_.cols()));
 
-    Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
+    for (Eigen::Index i = 0; i < neighboring_pairs_.rows(); ++i) {
+      for (Eigen::Index j = 0; j < neighboring_pairs_.cols(); ++j) {
+        d_neighboring_pairs[i][j] = neighboring_pairs_(i, j);
+      }
+    }
+
+    std::vector<double> d_neighbor_dists(
+        neighbor_dists.data(), neighbor_dists.data() + neighbor_dists.size());
+
+    // Pre-compute filtering weights, and rescale the lambda parameter
+    int n_neighbor_pairs = d_neighboring_pairs[0].size();
     if (n_neighbor_pairs <= 0) {
       return false;
     }
@@ -576,30 +611,45 @@ protected:
     precomputed_area_spatial_guidance_weights_.resize(n_neighbor_pairs);
     double h_spatial = -0.5 / (param.eta * param.eta);
     double h_guidance = -0.5 / (param.mu * param.mu);
-    Eigen::VectorXd area_spatial_weights(
+
+    std::vector<double> d_precomputed_area_spatial_guidance_weights(
+        n_neighbor_pairs);
+    std::vector<double> d_area_spatial_weights(
         n_neighbor_pairs); // Area-integrated spatial weights, used for
                            // rescaling lambda
 
-    OMP_PARALLEL {
-      OMP_FOR
-      for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-        // Read the indices of a neighboring pair, and their distance
-        int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
-        double d = neighbor_dists(i);
+    for (int i = 0; i < n_neighbor_pairs; ++i) {
+      int idx1 = d_neighboring_pairs[0][i];
+      int idx2 = d_neighboring_pairs[1][i];
 
-        // Compute the weights associated with the pair
-        area_spatial_weights(i) = (area_weights_(idx1) + area_weights_(idx2)) *
-                                  std::exp(h_spatial * d * d);
-        precomputed_area_spatial_guidance_weights_(i) =
-            (area_weights_(idx1) + area_weights_(idx2)) *
-            std::exp(
-                h_guidance *
-                    (guidance.col(idx1) - guidance.col(idx2)).squaredNorm() +
-                h_spatial * d * d);
+      double d = d_neighbor_dists[i];
+
+      double squaredNorm = 0.0;
+      for (int k = 0; k < d_guidance.size(); ++k) {
+        double diff = d_guidance[k][idx1] - d_guidance[k][idx2];
+        squaredNorm += diff * diff;
       }
+      squaredNorm = sqrt(squaredNorm);
+      double result = std::exp(h_guidance * squaredNorm + h_spatial * d * d);
+
+      d_area_spatial_weights[i] =
+          (d_area_weights[idx1] + d_area_weights[idx2]) *
+          std::exp(h_spatial * d * d);
+      d_precomputed_area_spatial_guidance_weights[i] =
+          (d_area_weights[idx1] + d_area_weights[idx2]) * result;
     }
 
-    assert(neighbor_dists.size() > 0);
+    Eigen::Map<Eigen::VectorXd> area_spatial_weights(
+        d_area_spatial_weights.data(), d_area_spatial_weights.size());
+
+    precomputed_area_spatial_guidance_weights_ = Eigen::Map<Eigen::VectorXd>(
+        d_precomputed_area_spatial_guidance_weights.data(),
+        d_precomputed_area_spatial_guidance_weights.size());
+
+    area_weights_ = Eigen::Map<Eigen::VectorXd>(d_area_spatial_weights.data(),
+                                                d_area_spatial_weights.size());
+
+    assert(d_neighbor_dists.size() > 0);
     param.lambda *=
         (area_weights_.sum() /
          area_spatial_weights.sum()); // Rescale lambda to make regularization
@@ -608,7 +658,8 @@ protected:
     // Pre-compute neighborhood_info_
     std::vector<std::vector<Eigen::Index>> neighbors(signal_count_);
     for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-      int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+      Eigen::Index idx1 = d_neighboring_pairs[0][i];
+      Eigen::Index idx2 = d_neighboring_pairs[1][i];
 
       neighbors[idx1].push_back(idx2);
       neighbors[idx1].push_back(i);
@@ -626,17 +677,14 @@ protected:
 
     neighborhood_info_.resize(2, 2 * n_neighbor_pairs);
 
-    OMP_PARALLEL {
-      OMP_FOR
-      for (int i = 0; i < signal_count_; ++i) {
-        std::vector<Eigen::Index> &current_neighbor_info = neighbors[i];
+    for (int i = 0; i < signal_count_; ++i) {
+      std::vector<Eigen::Index> &current_neighbor_info = neighbors[i];
 
-        if (!current_neighbor_info.empty()) {
-          Eigen::Index n_cols = current_neighbor_info.size() / 2;
-          neighborhood_info_.block(0, neighborhood_info_boundaries_(i), 2,
-                                   n_cols) =
-              Eigen::Map<Matrix2XIdx>(current_neighbor_info.data(), 2, n_cols);
-        }
+      if (!current_neighbor_info.empty()) {
+        Eigen::Index n_cols = current_neighbor_info.size() / 2;
+        neighborhood_info_.block(0, neighborhood_info_boundaries_(i), 2,
+                                 n_cols) =
+            Eigen::Map<Matrix2XIdx>(current_neighbor_info.data(), 2, n_cols);
       }
     }
 
