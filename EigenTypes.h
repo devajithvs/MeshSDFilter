@@ -19,14 +19,15 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
 #ifndef EIGENTYPES_H
 #define EIGENTYPES_H
@@ -34,9 +35,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-
-namespace SDFilter
-{
+namespace SDFilter {
 
 // Define eigen matrix types
 typedef Eigen::Matrix<double, 3, Eigen::Dynamic> Matrix3X;
@@ -51,25 +50,21 @@ typedef Eigen::SparseMatrix<double> SparseMatrixXd;
 typedef Eigen::Triplet<double> Triplet;
 
 // Conversion between a 3d vector type to Eigen::Vector3d
-template<typename Vec_T>
-inline Eigen::Vector3d to_eigen_vec3d(const Vec_T &vec)
-{
-    return Eigen::Vector3d(vec[0], vec[1], vec[2]);
+template <typename Vec_T>
+inline Eigen::Vector3d to_eigen_vec3d(const Vec_T &vec) {
+  return Eigen::Vector3d(vec[0], vec[1], vec[2]);
 }
 
+template <typename Vec_T>
+inline Vec_T from_eigen_vec3d(const Eigen::Vector3d &vec) {
+  Vec_T v;
+  v[0] = vec(0);
+  v[1] = vec(1);
+  v[2] = vec(2);
 
-template<typename Vec_T>
-inline Vec_T from_eigen_vec3d(const Eigen::Vector3d &vec)
-{
-    Vec_T v;
-    v[0] = vec(0);
-    v[1] = vec(1);
-    v[2] = vec(2);
-
-    return v;
+  return v;
 }
 
-}
-
+} // namespace SDFilter
 
 #endif // EIGENTYPES_H

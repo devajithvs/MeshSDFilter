@@ -19,75 +19,71 @@
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-// DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-// CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
 
-
-#include "MeshTypes.h"
 #include "MeshNormalFilter.h"
-#include <iostream>
+#include "MeshTypes.h"
 #include <fstream>
+#include <iostream>
 #include <vector>
 
+int main(int argc, char **argv) {
+  if (argc != 4) {
+    std::cout
+        << "Usage:	MeshSDFilter  OPTION_FILE  INPUT_MESH  OUTPUT_MESH"
+        << std::endl;
+    return 1;
+  }
 
+  TriMesh mesh;
+  if (!OpenMesh::IO::read_mesh(mesh, argv[2])) {
+    std::cerr << "Error: unable to read input mesh from the file " << argv[2]
+              << std::endl;
+    return 1;
+  }
 
-int main(int argc, char **argv)
-{
-	if(argc != 4)
-	{
-		std::cout << "Usage:	MeshSDFilter  OPTION_FILE  INPUT_MESH  OUTPUT_MESH" << std::endl;
-		return 1;
-	}
+#ifdef USE_OPENMP
+  Eigen::initParallel();
+#endif
 
+  // Load option file
+  SDFilter::MeshFilterParameters param;
+  if (!param.load(argv[1])) {
+    std::cerr << "Error: unable to load option file " << argv[1] << std::endl;
+    return 1;
+  }
+  if (!param.valid_parameters()) {
+    std::cerr << "Invalid filter options. Aborting..." << std::endl;
+    return 1;
+  }
+  param.output();
 
+  // Normalize the input mesh
+  Eigen::Vector3d original_center;
+  double original_scale;
+  SDFilter::normalize_mesh(mesh, original_center, original_scale);
 
-	TriMesh mesh;
-    if(!OpenMesh::IO::read_mesh(mesh, argv[2]))
-    {
-    	std::cerr << "Error: unable to read input mesh from the file " << argv[2] << std::endl;
-    	return 1;
-    }
+  // Filter the normals and construct the output mesh
+  TriMesh output_mesh;
+  SDFilter::MeshNormalFilter mesh_filter(mesh);
+  mesh_filter.filter(param, output_mesh);
 
-	#ifdef USE_OPENMP
-    Eigen::initParallel();
-	#endif
+  SDFilter::restore_mesh(output_mesh, original_center, original_scale);
 
-    // Load option file
-    SDFilter::MeshFilterParameters param;
-    if(!param.load(argv[1])){
-    	std::cerr << "Error: unable to load option file " << argv[1] << std::endl;
-    	return 1;
-    }
-    if(!param.valid_parameters()){
-    	std::cerr << "Invalid filter options. Aborting..." << std::endl;
-    	return 1;
-    }
-    param.output();
+  // Save output mesh
+  if (!SDFilter::write_mesh_high_accuracy(output_mesh, argv[3])) {
+    std::cerr << "Error: unable to save the result mesh to file " << argv[3]
+              << std::endl;
+    return 1;
+  }
 
-
-    // Normalize the input mesh
-    Eigen::Vector3d original_center;
-    double original_scale;
-    SDFilter::normalize_mesh(mesh, original_center, original_scale);
-
-    // Filter the normals and construct the output mesh
-    TriMesh output_mesh;
-    SDFilter::MeshNormalFilter mesh_filter(mesh);
-    mesh_filter.filter(param, output_mesh);
-
-    SDFilter::restore_mesh(output_mesh, original_center, original_scale);
-
-    // Save output mesh
-	if(!SDFilter::write_mesh_high_accuracy(output_mesh, argv[3])){
-		std::cerr << "Error: unable to save the result mesh to file " << argv[3] << std::endl;
-		return 1;
-	}
-
-	return 0;
+  return 0;
 }
