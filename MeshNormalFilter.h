@@ -172,6 +172,22 @@ protected:
 
   bool print_error_evaluation_; // The printing of mesh update error
 
+  bool
+  get_neighborhood(const Parameters &param,
+                   std::vector<std::vector<Eigen::Index>> &d_neighbor_pairs,
+                   std::vector<double> &d_neighbor_dist) {
+    Eigen::Matrix2Xi neighbor_pairs = convertVectorToMatrix(d_neighbor_pairs);
+    Eigen::VectorXd neighbor_dist = convertVectorToVectorXd(d_neighbor_dist);
+    if (get_neighborhood(param, neighbor_pairs, neighbor_dist)) {
+
+      d_neighbor_pairs = convertMatrixToVector(neighbor_pairs);
+      d_neighbor_dist = convertVectorXdToVector(neighbor_dist);
+      return true;
+    }
+
+    return false;
+  }
+
   bool get_neighborhood(const Parameters &param,
                         Eigen::Matrix2Xi &neighbor_pairs,
                         Eigen::VectorXd &neighbor_dist) {

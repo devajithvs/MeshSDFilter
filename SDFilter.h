@@ -65,19 +65,30 @@ namespace SDFilter {
 
 Eigen::MatrixXd
 convertVectorToMatrix(const std::vector<std::vector<double>> &inputVector) {
-  // Assume all inner vectors have the same size, get number of cols from first
-  // one.
-
   Eigen::MatrixXd outputMatrix;
-  if (inputVector.size() > 0)
+  if (!inputVector.empty()) {
     outputMatrix.resize(inputVector.size(), inputVector[0].size());
 
-  for (size_t i = 0; i < inputVector.size(); ++i) {
-    for (size_t j = 0; j < inputVector[i].size(); ++j) {
-      outputMatrix(i, j) = inputVector[i][j];
+    for (size_t i = 0; i < inputVector.size(); ++i) {
+      for (size_t j = 0; j < inputVector[i].size(); ++j) {
+        outputMatrix(i, j) = inputVector[i][j];
+      }
     }
   }
+  return outputMatrix;
+}
 
+Eigen::Matrix2Xi convertVectorToMatrix(
+    const std::vector<std::vector<Eigen::Index>> &inputVector) {
+  Eigen::Matrix2Xi outputMatrix;
+  if (!inputVector.empty()) {
+    outputMatrix.resize(2, inputVector[0].size());
+
+    for (size_t i = 0; i < inputVector[0].size(); ++i) {
+      outputMatrix(0, i) = inputVector[0][i];
+      outputMatrix(1, i) = inputVector[1][i];
+    }
+  }
   return outputMatrix;
 }
 
@@ -418,7 +429,7 @@ protected:
     Eigen::MatrixXd filtered_signals;
     double h = -0.5 / (param.nu * param.nu);
 
-    Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
+    Eigen::Index n_neighbor_pairs = d_neighboring_pairs_[0].size();
 
     // The weights for neighboring pairs that are used for convex combination of
     // neighboring signals in the fixed-point solver
@@ -438,7 +449,8 @@ protected:
       OMP_PARALLEL {
         OMP_FOR
         for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-          int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+          int idx1 = d_neighboring_pairs_[0][i],
+              idx2 = d_neighboring_pairs_[1][i];
 
           double squaredNorm = 0.0;
           for (size_t k = 0; k < d_signals_.size(); ++k) {
@@ -596,6 +608,7 @@ protected:
                   // when there is no normalization constraint
   Eigen::VectorXd area_weights_; // Area weights for each element
 
+  std::vector<std::vector<Eigen::Index>> d_neighboring_pairs_;
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
                                        // pair of neighboring elements
   Eigen::VectorXd
@@ -657,22 +670,16 @@ protected:
       }
     }
 
-    Eigen::VectorXd neighbor_dists;
-    if (!get_neighborhood(param, neighboring_pairs_, neighbor_dists)) {
+    std::vector<double> d_neighbor_dists;
+    if (!get_neighborhood(param, d_neighboring_pairs_, d_neighbor_dists)) {
       std::cerr
           << "Unable to get neighborhood information, no filtering done..."
           << std::endl;
       return false;
     }
 
-    std::vector<std::vector<Eigen::Index>> d_neighboring_pairs =
-        convertMatrixToVector(neighboring_pairs_);
-
-    std::vector<double> d_neighbor_dists =
-        convertVectorXdToVector(neighbor_dists);
-
     // Pre-compute filtering weights, and rescale the lambda parameter
-    int n_neighbor_pairs = d_neighboring_pairs[0].size();
+    int n_neighbor_pairs = d_neighboring_pairs_[0].size();
     if (n_neighbor_pairs <= 0) {
       return false;
     }
@@ -687,8 +694,8 @@ protected:
                            // rescaling lambda
 
     for (int i = 0; i < n_neighbor_pairs; ++i) {
-      int idx1 = d_neighboring_pairs[0][i];
-      int idx2 = d_neighboring_pairs[1][i];
+      int idx1 = d_neighboring_pairs_[0][i];
+      int idx2 = d_neighboring_pairs_[1][i];
 
       double d = d_neighbor_dists[i];
 
@@ -722,8 +729,8 @@ protected:
     // Pre-compute neighborhood_info_
     std::vector<std::vector<Eigen::Index>> neighbors(signal_count_);
     for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-      Eigen::Index idx1 = d_neighboring_pairs[0][i];
-      Eigen::Index idx2 = d_neighboring_pairs[1][i];
+      Eigen::Index idx1 = d_neighboring_pairs_[0][i];
+      Eigen::Index idx2 = d_neighboring_pairs_[1][i];
 
       neighbors[idx1].push_back(idx2);
       neighbors[idx1].push_back(i);
@@ -756,6 +763,11 @@ protected:
   }
 
   // Find out all neighboring paris, as well as their distance
+  virtual bool
+  get_neighborhood(const Parameters &param,
+                   std::vector<std::vector<Eigen::Index>> &d_neighbor_pairs,
+                   std::vector<double> &d_neighbor_dist) = 0;
+
   virtual bool get_neighborhood(const Parameters &param,
                                 Eigen::Matrix2Xi &neighbor_pairs,
                                 Eigen::VectorXd &neighbor_dist) = 0;
@@ -763,7 +775,7 @@ protected:
   double target_function(const Parameters &param,
                          const Eigen::MatrixXd &init_signals) {
     // Compute regularizer term, using the contribution from each neighbor pair
-    Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
+    Eigen::Index n_neighbor_pairs = d_neighboring_pairs_[0].size();
     Eigen::VectorXd pair_values(n_neighbor_pairs);
     pair_values.setZero();
     double h = -0.5 / (param.nu * param.nu);
@@ -771,7 +783,8 @@ protected:
     OMP_PARALLEL {
       OMP_FOR
       for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-        int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+        int idx1 = d_neighboring_pairs_[0][i],
+            idx2 = d_neighboring_pairs_[1][i];
 
         double squaredNorm = 0.0;
         for (int k = 0; k < d_signals_.size(); ++k) {
