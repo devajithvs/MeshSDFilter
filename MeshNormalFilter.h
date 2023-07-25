@@ -126,8 +126,13 @@ public:
 
     Timer::EventID update_begin_time = timer.get_time();
 
+    Matrix3X target_normals(3, d_signals_[0].size());
+    for (int i = 0; i < 3; ++i) {
+      for (size_t j = 0; j < d_signals_[0].size(); ++j) {
+        target_normals(i, j) = d_signals_[i][j];
+      }
+    }
     // Normalize the filtered face normals
-    Matrix3X target_normals = signals_.block(0, 0, 3, signals_.cols());
     target_normals.colwise().normalize();
 
     if (param.mesh_update_method == MeshFilterParameters::ITERATIVE_UPDATE) {

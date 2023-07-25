@@ -407,7 +407,7 @@ protected:
 
   void fixedpoint_solver(const Parameters &param) {
     // Store signals in the previous iteration
-    Eigen::MatrixXd init_signals = signals_;
+    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_signals_);
     Eigen::MatrixXd prev_signals;
 
     // Weighted initial signals, as used in the fixed-point solver
@@ -432,7 +432,7 @@ protected:
     int output_frequency = 10;
 
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
-      prev_signals = signals_;
+      prev_signals = convertVectorToMatrix(d_signals_);
       filtered_signals = weighted_init_signals;
 
       OMP_PARALLEL {
@@ -440,10 +440,15 @@ protected:
         for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
           int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
 
+          double squaredNorm = 0.0;
+          for (size_t k = 0; k < d_signals_.size(); ++k) {
+            double diff = d_signals_[k][idx1] - d_signals_[k][idx2];
+            squaredNorm += diff * diff;
+          }
+
           neighbor_pair_weights(i) =
               precomputed_area_spatial_guidance_weights_(i) *
-              std::exp(h *
-                       (signals_.col(idx1) - signals_.col(idx2)).squaredNorm());
+              std::exp(h * squaredNorm);
         }
 
         OMP_FOR
@@ -458,8 +463,10 @@ protected:
             Eigen::Index neighbor_idx = neighborhood_info_(0, j);
             Eigen::Index coef_idx = neighborhood_info_(1, j);
 
-            filtered_signals.col(i) +=
-                signals_.col(neighbor_idx) * neighbor_pair_weights(coef_idx);
+            for (size_t k = 0; k < d_signals_.size(); ++k) {
+              filtered_signals(k, i) +=
+                  d_signals_[k][neighbor_idx] * neighbor_pair_weights(coef_idx);
+            }
           }
 
           if (param.normalize_iterates) {
@@ -470,10 +477,17 @@ protected:
         }
       }
 
-      signals_ = filtered_signals;
+      d_signals_ = convertMatrixToVector(filtered_signals);
 
-      double var_disp_sqrnorm =
-          area_weights_.dot((signals_ - prev_signals).colwise().squaredNorm());
+      double var_disp_sqrnorm = 0.0;
+      for (size_t i = 0; i < d_signals_[0].size(); ++i) {
+        double column_sum = 0.0;
+        for (size_t j = 0; j < d_signals_.size(); ++j) {
+          double diff = d_signals_[j][i] - prev_signals(j, i);
+          column_sum += diff * diff;
+        }
+        var_disp_sqrnorm += area_weights_[i] * column_sum;
+      }
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
@@ -577,9 +591,9 @@ protected:
   int signal_dim_;   // Dimension of the signals
   int signal_count_; // Number of signals
 
-  Eigen::MatrixXd
-      signals_; // Signals to be filtered. Represented in homogeneous form when
-                // there is no normalization constraint
+  std::vector<std::vector<double>>
+      d_signals_; // Signals to be filtered. Represented in homogeneous form
+                  // when there is no normalization constraint
   Eigen::VectorXd area_weights_; // Area weights for each element
 
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
@@ -629,14 +643,18 @@ protected:
       return false;
     }
 
-    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_init_signals);
-
     if (param.normalize_iterates) {
-      signals_ = init_signals;
+      d_signals_ = d_init_signals;
     } else {
-      signals_.resize(signal_dim_ + 1, signal_count_);
-      signals_.block(0, 0, signal_dim_, signal_count_) = init_signals;
-      signals_.row(signal_dim_).setOnes();
+      d_signals_.resize(signal_dim_ + 1, std::vector<double>(signal_count_));
+      for (int i = 0; i < signal_dim_; ++i) {
+        for (int j = 0; j < signal_count_; ++j) {
+          d_signals_[i][j] = d_init_signals[i][j];
+        }
+      }
+      for (int j = 0; j < signal_count_; ++j) {
+        d_signals_[signal_dim_][j] = 1.0;
+      }
     }
 
     Eigen::VectorXd neighbor_dists;
@@ -659,7 +677,6 @@ protected:
       return false;
     }
 
-    precomputed_area_spatial_guidance_weights_.resize(n_neighbor_pairs);
     double h_spatial = -0.5 / (param.eta * param.eta);
     double h_guidance = -0.5 / (param.mu * param.mu);
 
@@ -755,10 +772,14 @@ protected:
       OMP_FOR
       for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
         int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+
+        double squaredNorm = 0.0;
+        for (int k = 0; k < d_signals_.size(); ++k) {
+          double diff = d_signals_[k][idx1] - d_signals_[k][idx2];
+          squaredNorm += diff * diff;
+        }
         pair_values[i] = precomputed_area_spatial_guidance_weights_(i) *
-                         std::max(0.0, 1.0 - std::exp(h * (signals_.col(idx1) -
-                                                           signals_.col(idx2))
-                                                              .squaredNorm()));
+                         std::max(0.0, 1.0 - std::exp(h * squaredNorm));
       }
     }
 
@@ -766,8 +787,16 @@ protected:
 
     // Compute the fidelity term, which is the squared difference between
     // current and initial signals, weighted by the areas
-    double fid =
-        area_weights_.dot((signals_ - init_signals).colwise().squaredNorm());
+    double fid = 0.0;
+
+    for (size_t col = 0; col < d_signals_[0].size(); ++col) {
+      double colSum = 0.0;
+      for (size_t row = 0; row < d_signals_.size(); ++row) {
+        double diff = d_signals_[row][col] - init_signals(row, col);
+        colSum += diff * diff;
+      }
+      fid += area_weights_(col) * colSum;
+    }
 
     return fid + reg * param.lambda;
   }
