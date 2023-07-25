@@ -63,6 +63,74 @@
 
 namespace SDFilter {
 
+Eigen::MatrixXd
+convertVectorToMatrix(const std::vector<std::vector<double>> &inputVector) {
+  // Assume all inner vectors have the same size, get number of cols from first
+  // one.
+
+  Eigen::MatrixXd outputMatrix;
+  if (inputVector.size() > 0)
+    outputMatrix.resize(inputVector.size(), inputVector[0].size());
+
+  for (size_t i = 0; i < inputVector.size(); ++i) {
+    for (size_t j = 0; j < inputVector[i].size(); ++j) {
+      outputMatrix(i, j) = inputVector[i][j];
+    }
+  }
+
+  return outputMatrix;
+}
+
+std::vector<std::vector<double>>
+convertMatrixToVector(const Eigen::MatrixXd &inputMatrix) {
+  std::vector<std::vector<double>> outputVector(
+      inputMatrix.rows(), std::vector<double>(inputMatrix.cols()));
+
+  for (Eigen::Index i = 0; i < inputMatrix.rows(); ++i) {
+    for (Eigen::Index j = 0; j < inputMatrix.cols(); ++j) {
+      outputVector[i][j] = inputMatrix(i, j);
+    }
+  }
+
+  return outputVector;
+}
+
+std::vector<std::vector<Eigen::Index>>
+convertMatrixToVector(const Eigen::Matrix2Xi &inputMatrix) {
+  std::vector<std::vector<Eigen::Index>> outputVector(
+      inputMatrix.rows(), std::vector<Eigen::Index>(inputMatrix.cols()));
+
+  for (Eigen::Index i = 0; i < inputMatrix.rows(); ++i) {
+    for (Eigen::Index j = 0; j < inputMatrix.cols(); ++j) {
+      outputVector[i][j] = inputMatrix(i, j);
+    }
+  }
+
+  return outputVector;
+}
+
+Eigen::VectorXd
+convertVectorToVectorXd(const std::vector<double> &inputVector) {
+  Eigen::VectorXd outputVector(inputVector.size());
+
+  for (size_t i = 0; i < inputVector.size(); ++i) {
+    outputVector(i) = inputVector[i];
+  }
+
+  return outputVector;
+}
+
+std::vector<double>
+convertVectorXdToVector(const Eigen::VectorXd &inputVector) {
+  std::vector<double> outputVector(inputVector.size());
+
+  for (Eigen::Index i = 0; i < inputVector.size(); ++i) {
+    outputVector[i] = inputVector(i);
+  }
+
+  return outputVector;
+}
+
 class Parameters {
 public:
   Parameters()
@@ -540,38 +608,28 @@ protected:
                                 Eigen::MatrixXd &init_signals,
                                 Eigen::VectorXd &area_weights) = 0;
 
+  virtual void
+  get_initial_data(std::vector<std::vector<double>> &d_guidance,
+                   std::vector<std::vector<double>> &d_init_signals,
+                   std::vector<double> &d_area_weights) = 0;
+
   bool initialize_filter(Parameters &param) {
     // Retrieve input signals and their area weights
-    Eigen::MatrixXd guidance, init_signals;
-    get_initial_data(guidance, init_signals, area_weights_);
-
-    // Convert Eigen matrices to C++ vectors
-    std::vector<std::vector<double>> d_guidance(
-        guidance.rows(), std::vector<double>(guidance.cols()));
-    for (int i = 0; i < guidance.rows(); ++i) {
-      for (int j = 0; j < guidance.cols(); ++j) {
-        d_guidance[i][j] = guidance(i, j);
-      }
-    }
-
-    std::vector<std::vector<double>> d_init_signals(
-        init_signals.rows(), std::vector<double>(init_signals.cols()));
-    for (int i = 0; i < init_signals.rows(); ++i) {
-      for (int j = 0; j < init_signals.cols(); ++j) {
-        d_init_signals[i][j] = init_signals(i, j);
-      }
-    }
-
+    std::vector<std::vector<double>> d_guidance, d_init_signals;
     std::vector<double> d_area_weights(area_weights_.size());
     for (int i = 0; i < area_weights_.size(); ++i) {
       d_area_weights[i] = area_weights_(i);
     }
+
+    get_initial_data(d_guidance, d_init_signals, d_area_weights);
 
     signal_dim_ = d_init_signals.size();
     signal_count_ = d_init_signals[0].size();
     if (signal_count_ <= 0) {
       return false;
     }
+
+    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_init_signals);
 
     if (param.normalize_iterates) {
       signals_ = init_signals;
@@ -589,20 +647,11 @@ protected:
       return false;
     }
 
-    std::vector<std::vector<Eigen::Index>> d_neighboring_pairs(
-        neighboring_pairs_.rows(),
-        std::vector<Eigen::Index>(neighboring_pairs_.cols()));
+    std::vector<std::vector<Eigen::Index>> d_neighboring_pairs =
+        convertMatrixToVector(neighboring_pairs_);
 
-    for (Eigen::Index i = 0; i < neighboring_pairs_.rows(); ++i) {
-      for (Eigen::Index j = 0; j < neighboring_pairs_.cols(); ++j) {
-        d_neighboring_pairs[i][j] = neighboring_pairs_(i, j);
-      }
-    }
-
-    std::vector<double> d_neighbor_dists(neighbor_dists.size());
-    for (int i = 0; i < neighbor_dists.size(); ++i) {
-      d_neighbor_dists[i] = neighbor_dists(i);
-    }
+    std::vector<double> d_neighbor_dists =
+        convertVectorXdToVector(neighbor_dists);
 
     // Pre-compute filtering weights, and rescale the lambda parameter
     int n_neighbor_pairs = d_neighboring_pairs[0].size();
@@ -640,24 +689,12 @@ protected:
           (d_area_weights[idx1] + d_area_weights[idx2]) * result;
     }
 
-    // Copy elements using loops
-    Eigen::VectorXd area_spatial_weights(d_area_spatial_weights.size());
-    for (size_t i = 0; i < d_area_spatial_weights.size(); ++i) {
-      area_spatial_weights(i) = d_area_spatial_weights[i];
-    }
-
-    precomputed_area_spatial_guidance_weights_.resize(
-        d_precomputed_area_spatial_guidance_weights.size());
-    for (size_t i = 0; i < d_precomputed_area_spatial_guidance_weights.size();
-         ++i) {
-      precomputed_area_spatial_guidance_weights_(i) =
-          d_precomputed_area_spatial_guidance_weights[i];
-    }
-
-    area_weights_.resize(d_area_weights.size());
-    for (size_t i = 0; i < d_area_weights.size(); ++i) {
-      area_weights_(i) = d_area_weights[i];
-    }
+    // Copy elements
+    Eigen::VectorXd area_spatial_weights =
+        convertVectorToVectorXd(d_area_spatial_weights);
+    precomputed_area_spatial_guidance_weights_ =
+        convertVectorToVectorXd(d_precomputed_area_spatial_guidance_weights);
+    area_weights_ = convertVectorToVectorXd(d_area_weights);
 
     assert(d_neighbor_dists.size() > 0);
     param.lambda *=

@@ -256,6 +256,21 @@ protected:
       }
     }
   }
+
+  virtual void
+  get_initial_data(std::vector<std::vector<double>> &d_guidance,
+                   std::vector<std::vector<double>> &d_init_signals,
+                   std::vector<double> &d_area_weights) {
+    Eigen::MatrixXd guidance = convertVectorToMatrix(d_guidance);
+    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_init_signals);
+    Eigen::VectorXd area_weights = convertVectorToVectorXd(d_area_weights);
+
+    get_initial_data(guidance, init_signals, area_weights);
+
+    d_guidance = convertMatrixToVector(guidance);
+    d_init_signals = convertMatrixToVector(init_signals);
+    d_area_weights = convertVectorXdToVector(area_weights);
+  }
 };
 
 } // namespace SDFilter
