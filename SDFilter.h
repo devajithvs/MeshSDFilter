@@ -548,23 +548,23 @@ protected:
     // Convert Eigen matrices to C++ vectors
     std::vector<std::vector<double>> d_guidance(
         guidance.rows(), std::vector<double>(guidance.cols()));
-    std::vector<std::vector<double>> d_init_signals(
-        init_signals.rows(), std::vector<double>(init_signals.cols()));
-    std::vector<double> d_area_weights(
-        area_weights_.data(), area_weights_.data() + area_weights_.size());
-
-    std::cerr << "Before initialize" << std::endl;
-    // Copy elements from Eigen::MatrixXd to C++ vectors
     for (int i = 0; i < guidance.rows(); ++i) {
       for (int j = 0; j < guidance.cols(); ++j) {
         d_guidance[i][j] = guidance(i, j);
       }
     }
 
+    std::vector<std::vector<double>> d_init_signals(
+        init_signals.rows(), std::vector<double>(init_signals.cols()));
     for (int i = 0; i < init_signals.rows(); ++i) {
       for (int j = 0; j < init_signals.cols(); ++j) {
         d_init_signals[i][j] = init_signals(i, j);
       }
+    }
+
+    std::vector<double> d_area_weights(area_weights_.size());
+    for (int i = 0; i < area_weights_.size(); ++i) {
+      d_area_weights[i] = area_weights_(i);
     }
 
     signal_dim_ = d_init_signals.size();
@@ -599,8 +599,10 @@ protected:
       }
     }
 
-    std::vector<double> d_neighbor_dists(
-        neighbor_dists.data(), neighbor_dists.data() + neighbor_dists.size());
+    std::vector<double> d_neighbor_dists(neighbor_dists.size());
+    for (int i = 0; i < neighbor_dists.size(); ++i) {
+      d_neighbor_dists[i] = neighbor_dists(i);
+    }
 
     // Pre-compute filtering weights, and rescale the lambda parameter
     int n_neighbor_pairs = d_neighboring_pairs[0].size();
@@ -629,7 +631,6 @@ protected:
         double diff = d_guidance[k][idx1] - d_guidance[k][idx2];
         squaredNorm += diff * diff;
       }
-      squaredNorm = sqrt(squaredNorm);
       double result = std::exp(h_guidance * squaredNorm + h_spatial * d * d);
 
       d_area_spatial_weights[i] =
@@ -639,15 +640,24 @@ protected:
           (d_area_weights[idx1] + d_area_weights[idx2]) * result;
     }
 
-    Eigen::Map<Eigen::VectorXd> area_spatial_weights(
-        d_area_spatial_weights.data(), d_area_spatial_weights.size());
+    // Copy elements using loops
+    Eigen::VectorXd area_spatial_weights(d_area_spatial_weights.size());
+    for (size_t i = 0; i < d_area_spatial_weights.size(); ++i) {
+      area_spatial_weights(i) = d_area_spatial_weights[i];
+    }
 
-    precomputed_area_spatial_guidance_weights_ = Eigen::Map<Eigen::VectorXd>(
-        d_precomputed_area_spatial_guidance_weights.data(),
+    precomputed_area_spatial_guidance_weights_.resize(
         d_precomputed_area_spatial_guidance_weights.size());
+    for (size_t i = 0; i < d_precomputed_area_spatial_guidance_weights.size();
+         ++i) {
+      precomputed_area_spatial_guidance_weights_(i) =
+          d_precomputed_area_spatial_guidance_weights[i];
+    }
 
-    area_weights_ = Eigen::Map<Eigen::VectorXd>(d_area_spatial_weights.data(),
-                                                d_area_spatial_weights.size());
+    area_weights_.resize(d_area_weights.size());
+    for (size_t i = 0; i < d_area_weights.size(); ++i) {
+      area_weights_(i) = d_area_weights[i];
+    }
 
     assert(d_neighbor_dists.size() > 0);
     param.lambda *=
