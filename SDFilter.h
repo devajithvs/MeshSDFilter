@@ -438,7 +438,7 @@ protected:
 
     // The weights for neighboring pairs that are used for convex combination of
     // neighboring signals in the fixed-point solver
-    Eigen::VectorXd neighbor_pair_weights(n_neighbor_pairs);
+    std::vector<double> neighbor_pair_weights(n_neighbor_pairs);
 
     // Compute the termination threshold for area weighted squread norm of
     // signal change between two iterations
@@ -466,7 +466,7 @@ protected:
             squaredNorm += diff * diff;
           }
 
-          neighbor_pair_weights(i) =
+          neighbor_pair_weights[i] =
               precomputed_area_spatial_guidance_weights_(i) *
               std::exp(h * squaredNorm);
         }
@@ -628,9 +628,9 @@ protected:
                   // when there is no normalization constraint
   std::vector<double> d_area_weights_; // Area weights for each element
 
-  std::vector<std::vector<size_s>> d_neighboring_pairs_;
-  Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
-                                       // pair of neighboring elements
+  std::vector<std::vector<size_s>>
+      d_neighboring_pairs_; // Each column stores the indices for a pair of
+                            // neighboring elements
   Eigen::VectorXd
       precomputed_area_spatial_guidance_weights_; // Precomputed weights (area,
                                                   // spatial Gaussian and
