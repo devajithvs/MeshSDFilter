@@ -418,14 +418,13 @@ protected:
 
   void fixedpoint_solver(const Parameters &param) {
     // Store signals in the previous iteration
-    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_signals_);
     std::vector<std::vector<double>> d_init_signals = d_signals_;
     Eigen::MatrixXd prev_signals;
 
     // TODO
     double weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
     Eigen::MatrixXd weighted_init_signals =
-        init_signals *
+        convertVectorToMatrix(d_signals_) *
         (convertVectorToVectorXd(d_area_weights_) * weight_scaling_factor)
             .asDiagonal();
     std::vector<std::vector<double>> d_weighted_init_signals =
@@ -444,7 +443,7 @@ protected:
     //     }
     // }
 
-    Eigen::MatrixXd filtered_signals;
+    std::vector<std::vector<double>> d_filtered_signals;
     double h = -0.5 / (param.nu * param.nu);
 
     Eigen::Index n_neighbor_pairs = d_neighboring_pairs_[0].size();
@@ -467,7 +466,7 @@ protected:
     // convertVectorToMatrix(d_weighted_init_signals);
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
       prev_signals = convertVectorToMatrix(d_signals_);
-      filtered_signals = weighted_init_signals;
+      d_filtered_signals = d_weighted_init_signals;
 
       OMP_PARALLEL {
         OMP_FOR
@@ -499,20 +498,33 @@ protected:
             Eigen::Index coef_idx = neighborhood_info_(1, j);
 
             for (size_t k = 0; k < d_signals_.size(); ++k) {
-              filtered_signals(k, i) +=
-                  d_signals_[k][neighbor_idx] * neighbor_pair_weights(coef_idx);
+              d_filtered_signals[k][i] +=
+                  d_signals_[k][neighbor_idx] * neighbor_pair_weights[coef_idx];
             }
           }
 
           if (param.normalize_iterates) {
-            filtered_signals.col(i).normalize();
+            // Normalize column i of d_filtered_signals
+            double norm = 0;
+            for (size_t k = 0; k < d_filtered_signals.size(); ++k) {
+              norm += d_filtered_signals[k][i] * d_filtered_signals[k][i];
+            }
+            norm = std::sqrt(norm);
+            for (size_t k = 0; k < d_filtered_signals.size(); ++k) {
+              d_filtered_signals[k][i] /= norm;
+            }
           } else {
-            filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
+            // Divide column i of d_filtered_signals by
+            // d_filtered_signals[signal_dim_][i]
+            double denom = d_filtered_signals[signal_dim_][i];
+            for (size_t k = 0; k < d_filtered_signals.size(); ++k) {
+              d_filtered_signals[k][i] /= denom;
+            }
           }
         }
       }
 
-      d_signals_ = convertMatrixToVector(filtered_signals);
+      d_signals_ = d_filtered_signals;
 
       double var_disp_sqrnorm = 0.0;
       for (size_t i = 0; i < d_signals_[0].size(); ++i) {
@@ -526,7 +538,8 @@ protected:
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
-                  << target_function(param, init_signals) << std::endl;
+                  << target_function(param, convertVectorToMatrix(d_signals_))
+                  << std::endl;
       } else if (print_progress_ && num_iter % output_frequency == 0) {
         std::cout << "Iteration " << num_iter << "..." << std::endl;
       }
