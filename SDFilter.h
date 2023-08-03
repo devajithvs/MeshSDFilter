@@ -791,8 +791,7 @@ protected:
                          const std::vector<std::vector<double>> &d_init_signals) {
     // Compute regularizer term, using the contribution from each neighbor pair
     size_s n_neighbor_pairs = d_neighboring_pairs_[0].size();
-    Eigen::VectorXd pair_values(n_neighbor_pairs);
-    pair_values.setZero();
+    std::vector<double> d_pair_values(n_neighbor_pairs, 0.0);
     double h = -0.5 / (param.nu * param.nu);
 
     OMP_PARALLEL {
@@ -806,12 +805,13 @@ protected:
           double diff = d_signals_[k][idx1] - d_signals_[k][idx2];
           squaredNorm += diff * diff;
         }
-        pair_values[i] = d_precomputed_area_spatial_guidance_weights_[i] *
-                         std::max(0.0, 1.0 - std::exp(h * squaredNorm));
+        d_pair_values[i] = d_precomputed_area_spatial_guidance_weights_[i] *
+                           std::max(0.0, 1.0 - std::exp(h * squaredNorm));
       }
     }
 
-    double reg = pair_values.sum();
+    double reg =
+        std::accumulate(d_pair_values.begin(), d_pair_values.end(), 0.0);
 
     // Compute the fidelity term, which is the squared difference between
     // current and initial signals, weighted by the areas
