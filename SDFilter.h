@@ -467,7 +467,7 @@ protected:
           }
 
           neighbor_pair_weights[i] =
-              precomputed_area_spatial_guidance_weights_(i) *
+              d_precomputed_area_spatial_guidance_weights_[i] *
               std::exp(h * squaredNorm);
         }
 
@@ -631,11 +631,11 @@ protected:
   std::vector<std::vector<size_s>>
       d_neighboring_pairs_; // Each column stores the indices for a pair of
                             // neighboring elements
-  Eigen::VectorXd
-      precomputed_area_spatial_guidance_weights_; // Precomputed weights (area,
-                                                  // spatial Gaussian and
-                                                  // guidance Gaussian) for
-                                                  // neighboring pairs
+  std::vector<double>
+      d_precomputed_area_spatial_guidance_weights_; // Precomputed weights
+                                                    // (area, spatial Gaussian
+                                                    // and guidance Gaussian)
+                                                    // for neighboring pairs
 
   // The neighborhood information for each signal element is stored as
   // contiguous columns within the neighborhood_info_ matrix For each column,
@@ -703,8 +703,7 @@ protected:
     double h_spatial = -0.5 / (param.eta * param.eta);
     double h_guidance = -0.5 / (param.mu * param.mu);
 
-    std::vector<double> d_precomputed_area_spatial_guidance_weights(
-        n_neighbor_pairs);
+    d_precomputed_area_spatial_guidance_weights_.resize(n_neighbor_pairs);
     std::vector<double> d_area_spatial_weights(
         n_neighbor_pairs); // Area-integrated spatial weights, used for
                            // rescaling lambda
@@ -725,13 +724,9 @@ protected:
       d_area_spatial_weights[i] =
           (d_area_weights_[idx1] + d_area_weights_[idx2]) *
           std::exp(h_spatial * d * d);
-      d_precomputed_area_spatial_guidance_weights[i] =
+      d_precomputed_area_spatial_guidance_weights_[i] =
           (d_area_weights_[idx1] + d_area_weights_[idx2]) * result;
     }
-
-    // Copy elements
-    precomputed_area_spatial_guidance_weights_ =
-        convertVectorToVectorXd(d_precomputed_area_spatial_guidance_weights);
 
     assert(d_neighbor_dists.size() > 0);
 
@@ -810,7 +805,7 @@ protected:
           double diff = d_signals_[k][idx1] - d_signals_[k][idx2];
           squaredNorm += diff * diff;
         }
-        pair_values[i] = precomputed_area_spatial_guidance_weights_(i) *
+        pair_values[i] = d_precomputed_area_spatial_guidance_weights_[i] *
                          std::max(0.0, 1.0 - std::exp(h * squaredNorm));
       }
     }
