@@ -356,7 +356,7 @@ protected:
 
   void get_initial_data(std::vector<std::vector<double>> &d_guidance,
                         std::vector<std::vector<double>> &d_init_signals,
-                        Eigen::VectorXd &area_weights) {
+                        std::vector<double> &d_area_weights) {
     size_t n_faces = mesh_.n_faces();
     d_init_signals.resize(3, std::vector<double>(n_faces));
 
@@ -377,7 +377,7 @@ protected:
 
     d_guidance = d_init_signals;
 
-    get_face_area_weights(mesh_, area_weights);
+    get_face_area_weights(mesh_, d_area_weights);
   }
 
   void get_initial_data(Eigen::MatrixXd &guidance,
@@ -394,17 +394,7 @@ protected:
 
     guidance = init_signals;
 
-    get_face_area_weights(mesh_, area_weights);
-  }
-
-  void get_initial_data(std::vector<std::vector<double>> &d_guidance,
-                        std::vector<std::vector<double>> &d_init_signals,
-                        std::vector<double> &d_area_weights) {
-    Eigen::VectorXd area_weights = convertVectorToVectorXd(d_area_weights);
-
-    get_initial_data(d_guidance, d_init_signals, area_weights);
-
-    d_area_weights = convertVectorXdToVector(area_weights);
+    // get_face_area_weights(mesh_, area_weights);
   }
 
   void reset_mesh_update_system() { system_matrix_factorized_ = false; }
@@ -490,16 +480,24 @@ private:
   }
 
   void get_face_area_weights(const TriMesh &mesh,
-                             Eigen::VectorXd &face_area_weights) const {
+                             std::vector<double> &face_area_weights) {
     face_area_weights.resize(mesh.n_faces());
 
     for (TriMesh::ConstFaceIter cf_it = mesh.faces_begin();
          cf_it != mesh.faces_end(); ++cf_it) {
-      face_area_weights(cf_it->idx()) =
+      face_area_weights[cf_it->idx()] =
           mesh.calc_sector_area(mesh.halfedge_handle(*cf_it));
     }
 
-    face_area_weights /= face_area_weights.mean();
+    // Calculate the mean of face_area_weights
+    double mean = std::accumulate(face_area_weights.begin(),
+                                  face_area_weights.end(), 0.0) /
+                  face_area_weights.size();
+
+    // Divide all elements in face_area_weights by the mean
+    for (double &weight : face_area_weights) {
+      weight /= mean;
+    }
   }
 
   bool iterative_mesh_update(const MeshFilterParameters &param,
@@ -620,12 +618,12 @@ private:
 
     int n_faces = output_mesh.n_faces();
     int n_vtx = output_mesh.n_vertices();
-    Eigen::VectorXd face_area_weights;
-    get_face_area_weights(output_mesh, face_area_weights);
+    std::vector<double> d_face_area_weights;
+    get_face_area_weights(output_mesh, d_face_area_weights);
 
     // Compute the initial centroid
     Eigen::Vector3d initial_centroid =
-        compute_centroid(face_vtx_idx, face_area_weights, vtx_pos);
+        compute_centroid(face_vtx_idx, d_face_area_weights, vtx_pos);
 
     // Set up the linear least squares system
     SparseMatrixXd A(3 * n_faces + 1, n_vtx);
@@ -653,7 +651,7 @@ private:
           face_vtx_pos.col(j) = vtx_pos.col(vtx_idx(j));
         }
 
-        double area_weight = std::sqrt(face_area_weights(i));
+        double area_weight = std::sqrt(d_face_area_weights[i]);
 
         for (int j = 0; j < 3; ++j) {
           // Search for coefficients such that
@@ -713,8 +711,8 @@ private:
 
     // Align the new mesh with the intial mesh
     vtx_pos = sol.transpose();
-    Eigen::Vector3d new_centroid = compute_centroid(
-        face_vtx_idx, convertVectorToVectorXd(d_area_weights_), vtx_pos);
+    Eigen::Vector3d new_centroid =
+        compute_centroid(face_vtx_idx, d_area_weights_, vtx_pos);
     vtx_pos.colwise() += initial_centroid - new_centroid;
     set_vertex_points(output_mesh, vtx_pos);
 
@@ -739,7 +737,7 @@ private:
 
   // Compute the centroid of a mesh given its vertex positions and face areas
   Eigen::Vector3d compute_centroid(const Eigen::Matrix3Xi &face_vtx_idx,
-                                   const Eigen::VectorXd &face_areas,
+                                   const std::vector<double> &face_areas,
                                    const Eigen::Matrix3Xd &vtx_pos) {
     int n_faces = face_vtx_idx.cols();
     Eigen::Matrix3Xd face_centroids(3, n_faces);
@@ -758,7 +756,14 @@ private:
       }
     }
 
-    return (face_centroids * face_areas) / face_areas.sum();
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    double total_area = 0.0;
+    for (int i = 0; i < n_faces; ++i) {
+      centroid += face_centroids.col(i) * face_areas[i];
+      total_area += face_areas[i];
+    }
+
+    return centroid / total_area;
   }
 
   ////////// Methods for evaluating the quality of the updated mesh
@@ -773,8 +778,8 @@ private:
         (init_vtx_pos - new_vtx_pos).colwise().squaredNorm();
 
     // Computer normalized vertex area weights from the original mesh
-    Eigen::VectorXd face_area_weights;
-    get_face_area_weights(mesh_, face_area_weights);
+    std::vector<double> d_face_area_weights;
+    get_face_area_weights(mesh_, d_face_area_weights);
     Eigen::Matrix3Xi face_vtx_indices;
     get_face_vertex_indices(mesh_, face_vtx_indices);
     int n_faces = mesh_.n_faces();
@@ -783,7 +788,7 @@ private:
     vtx_area.setZero();
     for (int i = 0; i < n_faces; ++i) {
       for (int j = 0; j < 3; ++j) {
-        vtx_area(face_vtx_indices(j, i)) += face_area_weights(i);
+        vtx_area(face_vtx_indices(j, i)) += d_face_area_weights[i];
       }
     }
     vtx_area /= vtx_area.sum();
