@@ -473,13 +473,13 @@ protected:
 
         OMP_FOR
         for (int i = 0; i < signal_count_; ++i) {
-          size_s neighbor_info_start_idx = neighborhood_info_boundaries_(i);
-          size_s neighbor_info_end_idx = neighborhood_info_boundaries_(i + 1);
+          size_s neighbor_info_start_idx = d_neighborhood_info_boundaries_[i];
+          size_s neighbor_info_end_idx = d_neighborhood_info_boundaries_[i + 1];
 
           for (size_s j = neighbor_info_start_idx; j < neighbor_info_end_idx;
                ++j) {
-            size_s neighbor_idx = neighborhood_info_(0, j);
-            size_s coef_idx = neighborhood_info_(1, j);
+            size_s neighbor_idx = d_neighborhood_info_[0][j];
+            size_s coef_idx = d_neighborhood_info_[1][j];
 
             for (size_t k = 0; k < d_signals_.size(); ++k) {
               d_filtered_signals[k][i] +=
@@ -641,9 +641,10 @@ protected:
   // contiguous columns within the neighborhood_info_ matrix For each column,
   // the first element is the index of a neighboring element, the second one is
   // the corresponding address within array neighboring_pairs_
-  Matrix2XIdx neighborhood_info_;
-  VectorXIdx neighborhood_info_boundaries_; // Boundary positions for the
-                                            // neighborhood information segments
+  std::vector<std::vector<size_s>> d_neighborhood_info_;
+  std::vector<size_s>
+      d_neighborhood_info_boundaries_; // Boundary positions for the
+                                       // neighborhood information segments
 
   bool print_progress_;
   bool print_timing_;
@@ -753,23 +754,28 @@ protected:
       neighbors[idx2].push_back(i);
     }
 
-    neighborhood_info_boundaries_.resize(signal_count_ + 1);
-    neighborhood_info_boundaries_(0) = 0;
+    d_neighborhood_info_boundaries_.resize(signal_count_ + 1);
+    d_neighborhood_info_boundaries_[0] = 0;
     for (int i = 0; i < signal_count_; ++i) {
-      neighborhood_info_boundaries_(i + 1) =
-          neighborhood_info_boundaries_(i) + neighbors[i].size() / 2;
+      d_neighborhood_info_boundaries_[i + 1] =
+          d_neighborhood_info_boundaries_[i] + neighbors[i].size() / 2;
     }
 
-    neighborhood_info_.resize(2, 2 * n_neighbor_pairs);
+    d_neighborhood_info_.resize(2, std::vector<size_s>(2 * n_neighbor_pairs));
 
     for (int i = 0; i < signal_count_; ++i) {
       std::vector<size_s> &current_neighbor_info = neighbors[i];
 
       if (!current_neighbor_info.empty()) {
         size_s n_cols = current_neighbor_info.size() / 2;
-        neighborhood_info_.block(0, neighborhood_info_boundaries_(i), 2,
-                                 n_cols) =
-            Eigen::Map<Matrix2XIdx>(current_neighbor_info.data(), 2, n_cols);
+        size_s offset = d_neighborhood_info_boundaries_[i];
+
+        for (size_s col = 0; col < n_cols; ++col) {
+          d_neighborhood_info_[0][offset + col] =
+              current_neighbor_info[2 * col];
+          d_neighborhood_info_[1][offset + col] =
+              current_neighbor_info[2 * col + 1];
+        }
       }
     }
 
