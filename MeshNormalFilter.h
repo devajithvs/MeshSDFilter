@@ -172,10 +172,9 @@ protected:
 
   bool print_error_evaluation_; // The printing of mesh update error
 
-  bool
-  get_neighborhood(const Parameters &param,
-                   std::vector<std::vector<Eigen::Index>> &d_neighbor_pairs,
-                   std::vector<double> &d_neighbor_dist) {
+  bool get_neighborhood(const Parameters &param,
+                        std::vector<std::vector<size_s>> &d_neighbor_pairs,
+                        std::vector<double> &d_neighbor_dist) {
     Eigen::Matrix2Xi neighbor_pairs = convertVectorToMatrix(d_neighbor_pairs);
     Eigen::VectorXd neighbor_dist = convertVectorToVectorXd(d_neighbor_dist);
     if (get_neighborhood(param, neighbor_pairs, neighbor_dist)) {
@@ -283,7 +282,7 @@ protected:
     VectorXIdx segment_start_addr(
         n_faces); // Starting address for the segment of each face within the
                   // neighbor pair array
-    Eigen::Index n_neighbor_pairs = 0;
+    size_s n_neighbor_pairs = 0;
 
     for (int i = 0; i < n_faces; ++i) {
       std::vector<int> &current_upper_list = upper_neighbor_lists[i];
@@ -330,8 +329,8 @@ protected:
         std::vector<int> &upper_neighbors = upper_neighbor_lists[i];
 
         if (!upper_neighbors.empty()) {
-          Eigen::Index start_col = segment_start_addr(i);
-          Eigen::Index n_cols = upper_neighbors.size();
+          size_s start_col = segment_start_addr(i);
+          size_s n_cols = upper_neighbors.size();
           neighbor_pairs.block(0, start_col, 1, n_cols).setConstant(i);
           neighbor_pairs.block(1, start_col, 1, n_cols) =
               Eigen::Map<Eigen::VectorXi>(upper_neighbors.data(),
@@ -341,7 +340,7 @@ protected:
       }
 
       OMP_FOR
-      for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
+      for (size_s i = 0; i < n_neighbor_pairs; ++i) {
         int idx1 = neighbor_pairs(0, i), idx2 = neighbor_pairs(1, i);
         neighbor_dist(i) =
             (face_centroids.col(idx1) - face_centroids.col(idx2)).norm();
@@ -352,7 +351,7 @@ protected:
     // std::cout << "Average neighborhood size: " << 2.0 * n_neighbor_pairs /
     // n_faces << std::endl;
 
-    return n_neighbor_pairs > Eigen::Index(0);
+    return n_neighbor_pairs > size_s(0);
   }
 
   void get_initial_data(Eigen::MatrixXd &guidance,
