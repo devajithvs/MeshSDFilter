@@ -111,12 +111,13 @@ public:
   }
 
 protected:
-  virtual void get_initial_data(Eigen::MatrixXd &guidance_normals,
-                                Eigen::MatrixXd &init_normals,
-                                Eigen::VectorXd &area_weights) {
+  virtual void
+  get_initial_data(std::vector<std::vector<double>> &d_guidance_normals,
+                   std::vector<std::vector<double>> &d_init_normals,
+                   std::vector<double> &d_area_weights) {
     // Call the base class method to fill in initial data
-    MeshNormalFilter::get_initial_data(guidance_normals, init_normals,
-                                       area_weights);
+    MeshNormalFilter::get_initial_data(d_guidance_normals, d_init_normals,
+                                       d_area_weights);
 
     // Update the guidance to patch-based normals
 
@@ -144,8 +145,14 @@ protected:
         if (!mesh_.is_boundary(eh)) {
           int f1 = mesh_.face_handle(mesh_.halfedge_handle(eh, 0)).idx();
           int f2 = mesh_.face_handle(mesh_.halfedge_handle(eh, 1)).idx();
-          edge_saliency[i] =
-              (init_normals.col(f1) - init_normals.col(f2)).norm();
+
+          double square_sum = 0;
+          for (size_t j = 0; j < d_init_normals[0].size(); ++j) {
+            auto diff = d_init_normals[f1][j] - d_init_normals[f2][j];
+            square_sum += diff * diff;
+          }
+
+          edge_saliency[i] = std::sqrt(square_sum);
         }
       }
 
@@ -219,8 +226,10 @@ protected:
 
         for (int k = 0; k < n_faces_in_patch; ++k) {
           int f_k = faces_in_patch[k];
-          face_normals.col(k) = init_normals.col(f_k);
-          face_area(k) = area_weights(f_k);
+          for (int row = 0; row < face_normals.rows(); ++row) {
+            face_normals(row, k) = d_init_normals[row][f_k];
+          }
+          face_area(k) = d_area_weights[f_k];
         }
 
         // Find the max normal difference within a patch
@@ -251,25 +260,13 @@ protected:
 
         int best_score_idx = -1;
         patch_scores.minCoeff(&best_score_idx);
-        guidance_normals.col(i) =
-            patch_avg_normal.col(neighborhood_faces[best_score_idx]);
+
+        for (size_t row = 0; row < d_guidance_normals.size(); ++row) {
+          d_guidance_normals[row][i] =
+              patch_avg_normal(row, neighborhood_faces[best_score_idx]);
+        }
       }
     }
-  }
-
-  virtual void
-  get_initial_data(std::vector<std::vector<double>> &d_guidance,
-                   std::vector<std::vector<double>> &d_init_signals,
-                   std::vector<double> &d_area_weights) {
-    Eigen::MatrixXd guidance = convertVectorToMatrix(d_guidance);
-    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_init_signals);
-    Eigen::VectorXd area_weights = convertVectorToVectorXd(d_area_weights);
-
-    get_initial_data(guidance, init_signals, area_weights);
-
-    d_guidance = convertMatrixToVector(guidance);
-    d_init_signals = convertMatrixToVector(init_signals);
-    d_area_weights = convertVectorXdToVector(area_weights);
   }
 };
 

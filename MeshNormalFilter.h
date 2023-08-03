@@ -380,23 +380,6 @@ protected:
     get_face_area_weights(mesh_, d_area_weights);
   }
 
-  void get_initial_data(Eigen::MatrixXd &guidance,
-                        Eigen::MatrixXd &init_signals,
-                        Eigen::VectorXd &area_weights) {
-    init_signals.resize(3, mesh_.n_faces());
-
-    for (TriMesh::ConstFaceIter cf_it = mesh_.faces_begin();
-         cf_it != mesh_.faces_end(); ++cf_it) {
-      Eigen::Vector3d f_normal =
-          to_eigen_vec3d(mesh_.calc_face_normal(*cf_it)).normalized();
-      init_signals.col(cf_it->idx()) = f_normal;
-    }
-
-    guidance = init_signals;
-
-    // get_face_area_weights(mesh_, area_weights);
-  }
-
   void reset_mesh_update_system() { system_matrix_factorized_ = false; }
 
   void set_mesh(const TriMesh &mesh, bool invalidate_update_system) {

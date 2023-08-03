@@ -651,10 +651,6 @@ protected:
 
   // Overwrite this in a subclass to provide the initial spatial positions,
   // guidance, and signals.
-  virtual void get_initial_data(Eigen::MatrixXd &guidance,
-                                Eigen::MatrixXd &init_signals,
-                                Eigen::VectorXd &area_weights) = 0;
-
   virtual void
   get_initial_data(std::vector<std::vector<double>> &d_guidance,
                    std::vector<std::vector<double>> &d_init_signals,
