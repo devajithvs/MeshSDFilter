@@ -419,29 +419,17 @@ protected:
   void fixedpoint_solver(const Parameters &param) {
     // Store signals in the previous iteration
     std::vector<std::vector<double>> d_init_signals = d_signals_;
-    Eigen::MatrixXd prev_signals;
+    std::vector<std::vector<double>> d_prev_signals;
 
-    // TODO
     double weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
-    Eigen::MatrixXd weighted_init_signals =
-        convertVectorToMatrix(d_signals_) *
-        (convertVectorToVectorXd(d_area_weights_) * weight_scaling_factor)
-            .asDiagonal();
-    std::vector<std::vector<double>> d_weighted_init_signals =
-        convertMatrixToVector(weighted_init_signals);
-
-    // // Weighted initial signals, as used in the fixed-point solver
-    // std::vector<std::vector<double>>
-    // d_weighted_init_signals(d_init_signals.size(),
-    // std::vector<double>(d_init_signals[0].size()));
-
-    // for (int i = 0; i < d_init_signals.size(); ++i) {
-    //     double weighted_value = d_area_weights_[i] * weight_scaling_factor;
-    //     for (int j = 0; j < d_init_signals[0].size(); ++j) {
-    //         d_weighted_init_signals[i][j] = d_init_signals[i][j] *
-    //         weighted_value;
-    //     }
-    // }
+    std::vector<std::vector<double>> d_weighted_init_signals(
+        d_signals_.size(), std::vector<double>(d_signals_[0].size(), 0.0));
+    for (size_t i = 0; i < d_signals_.size(); ++i) {
+      for (size_t j = 0; j < d_signals_[0].size(); ++j) {
+        d_weighted_init_signals[i][j] +=
+            d_signals_[i][j] * d_area_weights_[j] * weight_scaling_factor;
+      }
+    }
 
     std::vector<std::vector<double>> d_filtered_signals;
     double h = -0.5 / (param.nu * param.nu);
@@ -462,10 +450,8 @@ protected:
 
     int output_frequency = 10;
 
-    // auto weighted_init_signals =
-    // convertVectorToMatrix(d_weighted_init_signals);
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
-      prev_signals = convertVectorToMatrix(d_signals_);
+      d_prev_signals = d_signals_;
       d_filtered_signals = d_weighted_init_signals;
 
       OMP_PARALLEL {
@@ -528,7 +514,7 @@ protected:
       for (size_t i = 0; i < d_signals_[0].size(); ++i) {
         double column_sum = 0.0;
         for (size_t j = 0; j < d_signals_.size(); ++j) {
-          double diff = d_signals_[j][i] - prev_signals(j, i);
+          double diff = d_signals_[j][i] - d_prev_signals[j][i];
           column_sum += diff * diff;
         }
         var_disp_sqrnorm += d_area_weights_[i] * column_sum;
