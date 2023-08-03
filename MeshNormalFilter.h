@@ -354,6 +354,32 @@ protected:
     return n_neighbor_pairs > size_s(0);
   }
 
+  void get_initial_data(std::vector<std::vector<double>> &d_guidance,
+                        std::vector<std::vector<double>> &d_init_signals,
+                        Eigen::VectorXd &area_weights) {
+    size_t n_faces = mesh_.n_faces();
+    d_init_signals.resize(3, std::vector<double>(n_faces));
+
+    for (TriMesh::ConstFaceIter cf_it = mesh_.faces_begin();
+         cf_it != mesh_.faces_end(); ++cf_it) {
+      auto vec = mesh_.calc_face_normal(*cf_it);
+      std::vector<double> f_normal = {vec[0], vec[1], vec[2]};
+      // Normalize the normal vector
+      double length = std::sqrt(std::inner_product(
+          f_normal.begin(), f_normal.end(), f_normal.begin(), 0.0));
+      for (double &value : f_normal) {
+        value /= length;
+      }
+      d_init_signals[0][cf_it->idx()] = f_normal[0];
+      d_init_signals[1][cf_it->idx()] = f_normal[1];
+      d_init_signals[2][cf_it->idx()] = f_normal[2];
+    }
+
+    d_guidance = d_init_signals;
+
+    get_face_area_weights(mesh_, area_weights);
+  }
+
   void get_initial_data(Eigen::MatrixXd &guidance,
                         Eigen::MatrixXd &init_signals,
                         Eigen::VectorXd &area_weights) {
@@ -374,14 +400,10 @@ protected:
   void get_initial_data(std::vector<std::vector<double>> &d_guidance,
                         std::vector<std::vector<double>> &d_init_signals,
                         std::vector<double> &d_area_weights) {
-    Eigen::MatrixXd guidance = convertVectorToMatrix(d_guidance);
-    Eigen::MatrixXd init_signals = convertVectorToMatrix(d_init_signals);
     Eigen::VectorXd area_weights = convertVectorToVectorXd(d_area_weights);
 
-    get_initial_data(guidance, init_signals, area_weights);
+    get_initial_data(d_guidance, d_init_signals, area_weights);
 
-    d_guidance = convertMatrixToVector(guidance);
-    d_init_signals = convertMatrixToVector(init_signals);
     d_area_weights = convertVectorXdToVector(area_weights);
   }
 
