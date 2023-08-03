@@ -783,10 +783,6 @@ protected:
                    std::vector<std::vector<size_s>> &d_neighbor_pairs,
                    std::vector<double> &d_neighbor_dist) = 0;
 
-  virtual bool get_neighborhood(const Parameters &param,
-                                Eigen::Matrix2Xi &neighbor_pairs,
-                                Eigen::VectorXd &neighbor_dist) = 0;
-
   double target_function(const Parameters &param,
                          const std::vector<std::vector<double>> &d_init_signals) {
     // Compute regularizer term, using the contribution from each neighbor pair

@@ -175,21 +175,6 @@ protected:
   bool get_neighborhood(const Parameters &param,
                         std::vector<std::vector<size_s>> &d_neighbor_pairs,
                         std::vector<double> &d_neighbor_dist) {
-    Eigen::Matrix2Xi neighbor_pairs = convertVectorToMatrix(d_neighbor_pairs);
-    Eigen::VectorXd neighbor_dist = convertVectorToVectorXd(d_neighbor_dist);
-    if (get_neighborhood(param, neighbor_pairs, neighbor_dist)) {
-
-      d_neighbor_pairs = convertMatrixToVector(neighbor_pairs);
-      d_neighbor_dist = convertVectorXdToVector(neighbor_dist);
-      return true;
-    }
-
-    return false;
-  }
-
-  bool get_neighborhood(const Parameters &param,
-                        Eigen::Matrix2Xi &neighbor_pairs,
-                        Eigen::VectorXd &neighbor_dist) {
     // Neighborhood radius set to three times of eta
     double radius = 3.0 * param.eta;
     int n_faces = mesh_.n_faces();
@@ -320,8 +305,8 @@ protected:
       n_neighbor_pairs += current_upper_list.size();
     }
 
-    neighbor_pairs.resize(2, n_neighbor_pairs);
-    neighbor_dist.resize(n_neighbor_pairs);
+    d_neighbor_pairs.resize(2, std::vector<size_s>(n_neighbor_pairs));
+    d_neighbor_dist.resize(n_neighbor_pairs);
 
     OMP_PARALLEL {
       OMP_FOR
@@ -331,18 +316,29 @@ protected:
         if (!upper_neighbors.empty()) {
           size_s start_col = segment_start_addr(i);
           size_s n_cols = upper_neighbors.size();
-          neighbor_pairs.block(0, start_col, 1, n_cols).setConstant(i);
-          neighbor_pairs.block(1, start_col, 1, n_cols) =
-              Eigen::Map<Eigen::VectorXi>(upper_neighbors.data(),
-                                          upper_neighbors.size())
-                  .transpose();
+        }
+      }
+      for (int i = 0; i < n_faces; ++i) {
+        std::vector<int> &upper_neighbors = upper_neighbor_lists[i];
+
+        if (!upper_neighbors.empty()) {
+          size_s start_col = segment_start_addr(i);
+          size_s n_cols = upper_neighbors.size();
+
+          for (size_s col = 0; col < n_cols; ++col) {
+            // Fill the first row of neighbor_pairs with the value i
+            d_neighbor_pairs[0][start_col + col] = i;
+            // Fill the second row of neighbor_pairs with the values from
+            // upper_neighbors
+            d_neighbor_pairs[1][start_col + col] = upper_neighbors[col];
+          }
         }
       }
 
       OMP_FOR
       for (size_s i = 0; i < n_neighbor_pairs; ++i) {
-        int idx1 = neighbor_pairs(0, i), idx2 = neighbor_pairs(1, i);
-        neighbor_dist(i) =
+        int idx1 = d_neighbor_pairs[0][i], idx2 = d_neighbor_pairs[1][i];
+        d_neighbor_dist[i] =
             (face_centroids.col(idx1) - face_centroids.col(idx2)).norm();
       }
     }
