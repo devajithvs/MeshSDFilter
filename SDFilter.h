@@ -522,8 +522,7 @@ protected:
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
-                  << target_function(param, convertVectorToMatrix(d_signals_))
-                  << std::endl;
+                  << target_function(param, d_signals_) << std::endl;
       } else if (print_progress_ && num_iter % output_frequency == 0) {
         std::cout << "Iteration " << num_iter << "..." << std::endl;
       }
@@ -793,7 +792,7 @@ protected:
                                 Eigen::VectorXd &neighbor_dist) = 0;
 
   double target_function(const Parameters &param,
-                         const Eigen::MatrixXd &init_signals) {
+                         const std::vector<std::vector<double>> &d_init_signals) {
     // Compute regularizer term, using the contribution from each neighbor pair
     size_s n_neighbor_pairs = d_neighboring_pairs_[0].size();
     Eigen::VectorXd pair_values(n_neighbor_pairs);
@@ -825,7 +824,7 @@ protected:
     for (size_t col = 0; col < d_signals_[0].size(); ++col) {
       double colSum = 0.0;
       for (size_t row = 0; row < d_signals_.size(); ++row) {
-        double diff = d_signals_[row][col] - init_signals(row, col);
+        double diff = d_signals_[row][col] - d_init_signals[row][col];
         colSum += diff * diff;
       }
       fid += d_area_weights_[col] * colSum;
