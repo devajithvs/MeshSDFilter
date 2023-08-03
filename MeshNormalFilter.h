@@ -692,8 +692,8 @@ private:
 
     // Align the new mesh with the intial mesh
     vtx_pos = sol.transpose();
-    Eigen::Vector3d new_centroid =
-        compute_centroid(face_vtx_idx, area_weights_, vtx_pos);
+    Eigen::Vector3d new_centroid = compute_centroid(
+        face_vtx_idx, convertVectorToVectorXd(d_area_weights_), vtx_pos);
     vtx_pos.colwise() += initial_centroid - new_centroid;
     set_vertex_points(output_mesh, vtx_pos);
 

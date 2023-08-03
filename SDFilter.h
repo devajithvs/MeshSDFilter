@@ -419,12 +419,30 @@ protected:
   void fixedpoint_solver(const Parameters &param) {
     // Store signals in the previous iteration
     Eigen::MatrixXd init_signals = convertVectorToMatrix(d_signals_);
+    std::vector<std::vector<double>> d_init_signals = d_signals_;
     Eigen::MatrixXd prev_signals;
 
-    // Weighted initial signals, as used in the fixed-point solver
+    // TODO
+    double weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
     Eigen::MatrixXd weighted_init_signals =
         init_signals *
-        (area_weights_ * (2 * param.nu * param.nu / param.lambda)).asDiagonal();
+        (convertVectorToVectorXd(d_area_weights_) * weight_scaling_factor)
+            .asDiagonal();
+    std::vector<std::vector<double>> d_weighted_init_signals =
+        convertMatrixToVector(weighted_init_signals);
+
+    // // Weighted initial signals, as used in the fixed-point solver
+    // std::vector<std::vector<double>>
+    // d_weighted_init_signals(d_init_signals.size(),
+    // std::vector<double>(d_init_signals[0].size()));
+
+    // for (int i = 0; i < d_init_signals.size(); ++i) {
+    //     double weighted_value = d_area_weights_[i] * weight_scaling_factor;
+    //     for (int j = 0; j < d_init_signals[0].size(); ++j) {
+    //         d_weighted_init_signals[i][j] = d_init_signals[i][j] *
+    //         weighted_value;
+    //     }
+    // }
 
     Eigen::MatrixXd filtered_signals;
     double h = -0.5 / (param.nu * param.nu);
@@ -437,11 +455,16 @@ protected:
 
     // Compute the termination threshold for area weighted squread norm of
     // signal change between two iterations
+
+    double area_weights_sum =
+        std::accumulate(d_area_weights_.begin(), d_area_weights_.end(), 0.0);
     double disp_sqr_norm_threshold =
-        area_weights_.sum() * param.avg_disp_eps * param.avg_disp_eps;
+        area_weights_sum * param.avg_disp_eps * param.avg_disp_eps;
 
     int output_frequency = 10;
 
+    // auto weighted_init_signals =
+    // convertVectorToMatrix(d_weighted_init_signals);
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
       prev_signals = convertVectorToMatrix(d_signals_);
       filtered_signals = weighted_init_signals;
@@ -498,7 +521,7 @@ protected:
           double diff = d_signals_[j][i] - prev_signals(j, i);
           column_sum += diff * diff;
         }
-        var_disp_sqrnorm += area_weights_[i] * column_sum;
+        var_disp_sqrnorm += d_area_weights_[i] * column_sum;
       }
 
       if (print_diagnostic_info_) {
@@ -606,7 +629,7 @@ protected:
   std::vector<std::vector<double>>
       d_signals_; // Signals to be filtered. Represented in homogeneous form
                   // when there is no normalization constraint
-  Eigen::VectorXd area_weights_; // Area weights for each element
+  std::vector<double> d_area_weights_; // Area weights for each element
 
   std::vector<std::vector<Eigen::Index>> d_neighboring_pairs_;
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
@@ -643,12 +666,8 @@ protected:
   bool initialize_filter(Parameters &param) {
     // Retrieve input signals and their area weights
     std::vector<std::vector<double>> d_guidance, d_init_signals;
-    std::vector<double> d_area_weights(area_weights_.size());
-    for (int i = 0; i < area_weights_.size(); ++i) {
-      d_area_weights[i] = area_weights_(i);
-    }
 
-    get_initial_data(d_guidance, d_init_signals, d_area_weights);
+    get_initial_data(d_guidance, d_init_signals, d_area_weights_);
 
     signal_dim_ = d_init_signals.size();
     signal_count_ = d_init_signals[0].size();
@@ -707,24 +726,27 @@ protected:
       double result = std::exp(h_guidance * squaredNorm + h_spatial * d * d);
 
       d_area_spatial_weights[i] =
-          (d_area_weights[idx1] + d_area_weights[idx2]) *
+          (d_area_weights_[idx1] + d_area_weights_[idx2]) *
           std::exp(h_spatial * d * d);
       d_precomputed_area_spatial_guidance_weights[i] =
-          (d_area_weights[idx1] + d_area_weights[idx2]) * result;
+          (d_area_weights_[idx1] + d_area_weights_[idx2]) * result;
     }
 
     // Copy elements
-    Eigen::VectorXd area_spatial_weights =
-        convertVectorToVectorXd(d_area_spatial_weights);
     precomputed_area_spatial_guidance_weights_ =
         convertVectorToVectorXd(d_precomputed_area_spatial_guidance_weights);
-    area_weights_ = convertVectorToVectorXd(d_area_weights);
 
     assert(d_neighbor_dists.size() > 0);
+
+    double area_weights_sum =
+        std::accumulate(d_area_weights_.begin(), d_area_weights_.end(), 0.0);
+    double area_spatial_weights_sum = std::accumulate(
+        d_area_spatial_weights.begin(), d_area_spatial_weights.end(), 0.0);
+
     param.lambda *=
-        (area_weights_.sum() /
-         area_spatial_weights.sum()); // Rescale lambda to make regularization
-                                      // and fidelity terms comparable
+        (area_weights_sum /
+         area_spatial_weights_sum); // Rescale lambda to make regularization and
+                                    // fidelity terms comparable
 
     // Pre-compute neighborhood_info_
     std::vector<std::vector<Eigen::Index>> neighbors(signal_count_);
@@ -808,7 +830,7 @@ protected:
         double diff = d_signals_[row][col] - init_signals(row, col);
         colSum += diff * diff;
       }
-      fid += area_weights_(col) * colSum;
+      fid += d_area_weights_[col] * colSum;
     }
 
     return fid + reg * param.lambda;
