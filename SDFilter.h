@@ -299,12 +299,11 @@ void convert_to_gpu_memory(const Eigen::Matrix2Xi &matrix, int **dev_matrix) {
              cudaMemcpyHostToDevice);
 }
 
-__global__ void kernel_calculate_weights(int *dev_neighboring_pairs,
-                                         double *dev_neighbor_dists,
-                                         double *dev_area_weights,
-                                         double h_spatial, double h_guidance,
-                                         double *dev_guidance,
-                                         int n_neighbor_pairs) {
+__global__ void kernel_calculate_weights(
+    int n_neighbor_pairs, int *dev_neighboring_pairs,
+    double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
+    double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
+    double *dev_precomputed_area_spatial_guidance_weights) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n_neighbor_pairs) {
     int idx1 = dev_neighboring_pairs[2 * i],
@@ -313,9 +312,20 @@ __global__ void kernel_calculate_weights(int *dev_neighboring_pairs,
 
     double weight = (dev_area_weights[idx1] + dev_area_weights[idx2]) *
                     exp(h_spatial * d * d);
-    // Calculation for precomputed_area_spatial_guidance_weights_ needs to be
-    // implemented as it involves Eigen operations. Implement it after replacing
-    // Eigen::VectorXd guidance with CUDA-compatible type.
+    dev_area_spatial_weights[i] = weight;
+
+    // Calculate squaredNorm of guidance difference
+    double guidance_diff_norm_squared = 0.0;
+    for (int j = 0; j < /* Size of guidance vectors */; ++j) {
+      double diff = dev_guidance[j * /* Size of guidance */ +idx1] -
+                    dev_guidance[j * /* Size of guidance */ +idx2];
+      guidance_diff_norm_squared += diff * diff;
+    }
+
+    double guidance_weight =
+        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
+        exp(h_guidance * guidance_diff_norm_squared + h_spatial * d * d);
+    dev_precomputed_area_spatial_guidance_weights[i] = guidance_weight;
   }
 }
 
@@ -651,6 +661,13 @@ protected:
     convert_to_gpu_memory(neighboring_pairs_, &dev_neighboring_pairs);
     convert_to_gpu_memory(neighbor_dists, &dev_neighbor_dists);
 
+    double *dev_area_spatial_weights;
+    double *dev_precomputed_area_spatial_guidance_weights;
+    cudaMalloc((void *)dev_area_spatial_weights,
+               n_neighbor_pairs * sizeof(double));
+    cudaMalloc((void *)dev_precomputed_area_spatial_guidance_weights,
+               n_neighbor_pairs * sizeof(double));
+
     // CUDA parameters
     int threadsPerBlock = 256;
     int blocksPerGrid =
@@ -659,8 +676,10 @@ protected:
     // Call kernel function to calculate precomputed area spatial guidance
     // weights
     kernel_calculate_weights<<<blocksPerGrid, threadsPerBlock>>>(
-        dev_neighboring_pairs, dev_neighbor_dists, dev_area_weights, h_spatial,
-        h_guidance, dev_guidance, n_neighbor_pairs);
+        n_neighbor_pairs, dev_neighboring_pairs, dev_neighbor_dists,
+        dev_area_weights, h_spatial, h_guidance, dev_guidance,
+        dev_area_spatial_weights,
+        dev_precomputed_area_spatial_guidance_weights);
 
     assert(neighbor_dists.size() > 0);
     param.lambda *=
