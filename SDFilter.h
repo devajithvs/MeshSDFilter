@@ -751,10 +751,14 @@ protected:
         dev_area_spatial_weights,
         dev_precomputed_area_spatial_guidance_weights);
 
-    convert_from_gpu_memory(dev_neighboring_pairs, neighboring_pairs_);
-    convert_from_gpu_memory(dev_neighbor_dists, neighbor_dists);
-    convert_from_gpu_memory(dev_area_weights, area_weights_);
-    convert_from_gpu_memory(dev_guidance, guidance);
+    // Check for errors
+    cudaError_t cudaError = cudaGetLastError();
+    if (cudaError != cudaSuccess) {
+      std::cerr << "CUDA kernel launch error: " << cudaGetErrorString(cudaError)
+                << std::endl;
+      // Handle the error appropriately (e.g., return, clean up, etc.)
+    }
+
     convert_from_gpu_memory(dev_area_spatial_weights, area_spatial_weights);
     convert_from_gpu_memory(dev_precomputed_area_spatial_guidance_weights,
                             precomputed_area_spatial_guidance_weights_);
