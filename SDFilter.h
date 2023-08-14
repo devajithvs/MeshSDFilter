@@ -299,6 +299,77 @@ void convert_to_gpu_memory(const Eigen::Matrix2Xi &matrix, int **dev_matrix) {
              cudaMemcpyHostToDevice);
 }
 
+void convert_from_gpu_memory(double *dev_matrix, Eigen::MatrixXd &matrix) {
+  int rows = matrix.rows();
+  int cols = matrix.cols();
+  int totalSize = rows * cols;
+
+  // Allocate memory on the CPU to store data from the GPU
+  double *host_matrix = new double[totalSize];
+
+  // Copy data from the GPU to the CPU
+  cudaMemcpy(host_matrix, dev_matrix, totalSize * sizeof(double),
+             cudaMemcpyDeviceToHost);
+
+  // Assign the data from the host_matrix to the Eigen matrix
+  for (int i = 0; i < rows; ++i) {
+    for (int j = 0; j < cols; ++j) {
+      matrix(i, j) = host_matrix[i * cols + j];
+    }
+  }
+
+  // Free the CPU memory
+  delete[] host_matrix;
+  // Free the GPU memory
+  cudaFree(dev_matrix);
+}
+
+void convert_from_gpu_memory(double *dev_vector, Eigen::VectorXd &vector) {
+  int size = vector.size();
+
+  // Allocate memory on the CPU to store data from the GPU
+  double *host_vector = new double[size];
+
+  // Copy data from the GPU to the CPU
+  cudaMemcpy(host_vector, dev_vector, size * sizeof(double),
+             cudaMemcpyDeviceToHost);
+
+  // Assign the data from the host_vector to the Eigen vector
+  for (int i = 0; i < size; ++i) {
+    vector(i) = host_vector[i];
+  }
+
+  // Free the CPU memory
+  delete[] host_vector;
+  // Free the GPU memory
+  cudaFree(dev_vector);
+}
+
+void convert_from_gpu_memory(int *dev_matrix, Eigen::Matrix2Xi &matrix) {
+  int rows = matrix.rows();
+  int cols = matrix.cols();
+  int totalSize = rows * cols;
+
+  // Allocate memory on the CPU to store data from the GPU
+  int *host_matrix = new int[totalSize];
+
+  // Copy data from the GPU to the CPU
+  cudaMemcpy(host_matrix, dev_matrix, totalSize * sizeof(int),
+             cudaMemcpyDeviceToHost);
+
+  // Assign the data from the host_matrix to the Eigen matrix
+  for (int i = 0; i < rows; ++i) {
+    for (int j = 0; j < cols; ++j) {
+      matrix(i, j) = host_matrix[i * cols + j];
+    }
+  }
+
+  // Free the CPU memory
+  delete[] host_matrix;
+  // Free the GPU memory
+  cudaFree(dev_matrix);
+}
+
 __global__ void kernel_calculate_weights(
     int n_neighbor_pairs, int *dev_neighboring_pairs,
     double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
@@ -316,9 +387,8 @@ __global__ void kernel_calculate_weights(
 
     // Calculate squaredNorm of guidance difference
     double guidance_diff_norm_squared = 0.0;
-    for (int j = 0; j < /* Size of guidance vectors */; ++j) {
-      double diff = dev_guidance[j * /* Size of guidance */ +idx1] -
-                    dev_guidance[j * /* Size of guidance */ +idx2];
+    for (int j = 0; j < 3; ++j) {
+      double diff = dev_guidance[j * 3 + idx1] - dev_guidance[j * 3 + idx2];
       guidance_diff_norm_squared += diff * diff;
     }
 
@@ -663,9 +733,9 @@ protected:
 
     double *dev_area_spatial_weights;
     double *dev_precomputed_area_spatial_guidance_weights;
-    cudaMalloc((void *)dev_area_spatial_weights,
+    cudaMalloc((void **)&dev_area_spatial_weights,
                n_neighbor_pairs * sizeof(double));
-    cudaMalloc((void *)dev_precomputed_area_spatial_guidance_weights,
+    cudaMalloc((void **)&dev_precomputed_area_spatial_guidance_weights,
                n_neighbor_pairs * sizeof(double));
 
     // CUDA parameters
@@ -680,6 +750,14 @@ protected:
         dev_area_weights, h_spatial, h_guidance, dev_guidance,
         dev_area_spatial_weights,
         dev_precomputed_area_spatial_guidance_weights);
+
+    convert_from_gpu_memory(dev_neighboring_pairs, neighboring_pairs_);
+    convert_from_gpu_memory(dev_neighbor_dists, neighbor_dists);
+    convert_from_gpu_memory(dev_area_weights, area_weights_);
+    convert_from_gpu_memory(dev_guidance, guidance);
+    convert_from_gpu_memory(dev_area_spatial_weights, area_spatial_weights);
+    convert_from_gpu_memory(dev_precomputed_area_spatial_guidance_weights,
+                            precomputed_area_spatial_guidance_weights_);
 
     assert(neighbor_dists.size() > 0);
     param.lambda *=
