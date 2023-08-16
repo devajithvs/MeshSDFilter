@@ -263,6 +263,19 @@ protected:
   }
 };
 
+void convert_to_gpu_memory(const Eigen::Matrix2Xi &matrix,
+                           Eigen::Index **dev_matrix) {
+  // Calculate total size of the matrix
+  int totalSize = matrix.rows() * matrix.cols();
+
+  // Allocate memory on the GPU
+  cudaMalloc((void **)dev_matrix, totalSize * sizeof(double));
+
+  // Copy data from the CPU to the GPU
+  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(double),
+             cudaMemcpyHostToDevice);
+}
+
 void convert_to_gpu_memory(const Eigen::MatrixXd &matrix, double **dev_matrix) {
   // Calculate total size of the matrix
   int totalSize = matrix.rows() * matrix.cols();
@@ -371,7 +384,7 @@ void convert_from_gpu_memory(int *dev_matrix, Eigen::Matrix2Xi &matrix) {
 }
 
 __global__ void kernel_calculate_weights(
-    int n_neighbor_pairs, int *dev_neighboring_pairs,
+    int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
     double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
     double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
     double *dev_precomputed_area_spatial_guidance_weights) {
@@ -381,23 +394,91 @@ __global__ void kernel_calculate_weights(
         idx2 = dev_neighboring_pairs[2 * i + 1];
     double d = dev_neighbor_dists[i];
 
-    double weight = (dev_area_weights[idx1] + dev_area_weights[idx2]) *
-                    exp(h_spatial * d * d);
-    dev_area_spatial_weights[i] = weight;
+    dev_area_spatial_weights[i] =
+        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
+        exp(h_spatial * d * d);
 
     // Calculate squaredNorm of guidance difference
     double guidance_diff_norm_squared = 0.0;
-    for (int j = 0; j < 3; ++j) {
-      double diff = dev_guidance[j * 3 + idx1] - dev_guidance[j * 3 + idx2];
+    for (int j = 0; j < guidance_dim; ++j) {
+      double diff = dev_guidance[j + guidance_dim * idx1] -
+                    dev_guidance[j + guidance_dim * idx2];
       guidance_diff_norm_squared += diff * diff;
     }
 
-    double guidance_weight =
+    dev_precomputed_area_spatial_guidance_weights[i] =
         (dev_area_weights[idx1] + dev_area_weights[idx2]) *
         exp(h_guidance * guidance_diff_norm_squared + h_spatial * d * d);
-    dev_precomputed_area_spatial_guidance_weights[i] = guidance_weight;
   }
 }
+
+// Define a CUDA kernel for the first loop
+__global__ void calculateWeightsKernel(
+    const int n_neighbor_pairs, const int signal_dim, const double h,
+    const Eigen::Index *dev_neighboring_pairs,
+    const double *dev_precomputed_area_spatial_guidance_weights,
+    const double *dev_signals, double *dev_neighbor_pair_weights) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n_neighbor_pairs) {
+    int idx1 = dev_neighboring_pairs[2 * i],
+        idx2 = dev_neighboring_pairs[2 * i + 1];
+
+    // Calculate squaredNorm of signal difference
+    double signal_diff_norm_squared = 0.0;
+    for (int j = 0; j < 3; ++j) {
+      double diff = dev_signals[j * 3 + idx1] - dev_signals[j * 3 + idx2];
+      signal_diff_norm_squared += diff * diff;
+    }
+
+    double result = expf(h * signal_diff_norm_squared);
+    dev_neighbor_pair_weights[i] =
+        dev_precomputed_area_spatial_guidance_weights[i] * result;
+  }
+}
+
+// // Define a CUDA kernel for the second loop
+// __global__ void calculateFilteredSignalsKernel(
+//     const int signal_count, const int signal_dim,
+//     const Eigen::Index *neighborhood_info_boundaries,
+//     const Eigen::Index *neighborhood_info, const float
+//     *neighbor_pair_weights, const float *signals, float *filtered_signals,
+//     bool normalize_iterates) {
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i < signal_count) {
+//     Eigen::Index neighbor_info_start_idx = neighborhood_info_boundaries[i];
+//     Eigen::Index neighbor_info_end_idx = neighborhood_info_boundaries[i + 1];
+
+//     for (Eigen::Index j = neighbor_info_start_idx; j < neighbor_info_end_idx;
+//          ++j) {
+//       Eigen::Index neighbor_idx = neighborhood_info[j];
+//       Eigen::Index coef_idx = neighborhood_info[j + neighbor_info.size()];
+
+//       atomicAdd(&filtered_signals[i * signal_dim + neighbor_idx],
+//                 signals[neighbor_idx] * neighbor_pair_weights[coef_idx]);
+//     }
+
+//     if (normalize_iterates) {
+//       float sum = 0.0f;
+//       for (int k = 0; k < signal_dim; ++k) {
+//         sum += filtered_signals[i * signal_dim + k] *
+//                filtered_signals[i * signal_dim + k];
+//       }
+//       sum = sqrtf(sum);
+//       for (int k = 0; k < signal_dim; ++k) {
+//         filtered_signals[i * signal_dim + k] /= sum;
+//       }
+//     } else {
+//       filtered_signals[i * signal_dim + signal_dim] =
+//           filtered_signals[i * signal_dim + signal_dim] != 0.0f
+//               ? filtered_signals[i * signal_dim + signal_dim]
+//               : 1.0f;
+//       for (int k = 0; k < signal_dim; ++k) {
+//         filtered_signals[i * signal_dim + k] /=
+//             filtered_signals[i * signal_dim + signal_dim];
+//       }
+//     }
+//   }
+// }
 
 class Timer {
 public:
@@ -502,40 +583,60 @@ protected:
       prev_signals = signals_;
       filtered_signals = weighted_init_signals;
 
-      OMP_PARALLEL {
-        OMP_FOR
-        for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
-          int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+      // // convert neighborhood pairs and neighbor distances to GPU memory
+      // Eigen::Index *dev_neighboring_pairs;
+      // double *dev_precomputed_area_spatial_guidance_weights;
+      // double *dev_signals;
+      // double *dev_neighbor_pair_weights;
+      // convert_to_gpu_memory(neighboring_pairs_, &dev_neighboring_pairs);
+      // convert_to_gpu_memory(precomputed_area_spatial_guidance_weights_,
+      //                       &dev_precomputed_area_spatial_guidance_weights);
+      // convert_to_gpu_memory(signals_, &dev_signals);
+      // convert_to_gpu_memory(neighbor_pair_weights,
+      // &dev_neighbor_pair_weights);
 
-          neighbor_pair_weights(i) =
-              precomputed_area_spatial_guidance_weights_(i) *
-              std::exp(h *
-                       (signals_.col(idx1) - signals_.col(idx2)).squaredNorm());
+      // int block_size = 256;
+      // int grid_size_weights = (n_neighbor_pairs + block_size - 1) /
+      // block_size; calculateWeightsKernel<<<grid_size_weights, block_size>>>(
+      //     n_neighbor_pairs, signals_.cols(), h, dev_neighboring_pairs,
+      //     dev_precomputed_area_spatial_guidance_weights, dev_signals,
+      //     dev_neighbor_pair_weights);
+
+      // convert_from_gpu_memory(dev_neighbor_pair_weights,
+      // neighbor_pair_weights);
+
+      OMP_FOR
+      for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
+        int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+
+        neighbor_pair_weights(i) =
+            precomputed_area_spatial_guidance_weights_(i) *
+            std::exp(h *
+                     (signals_.col(idx1) - signals_.col(idx2)).squaredNorm());
+      }
+
+      OMP_FOR
+      for (int i = 0; i < signal_count_; ++i) {
+        Eigen::Index neighbor_info_start_idx = neighborhood_info_boundaries_(i);
+        Eigen::Index neighbor_info_end_idx =
+            neighborhood_info_boundaries_(i + 1);
+
+        for (Eigen::Index j = neighbor_info_start_idx;
+             j < neighbor_info_end_idx; ++j) {
+          Eigen::Index neighbor_idx = neighborhood_info_(0, j);
+          Eigen::Index coef_idx = neighborhood_info_(1, j);
+
+          filtered_signals.col(i) +=
+              signals_.col(neighbor_idx) * neighbor_pair_weights(coef_idx);
         }
 
-        OMP_FOR
-        for (int i = 0; i < signal_count_; ++i) {
-          Eigen::Index neighbor_info_start_idx =
-              neighborhood_info_boundaries_(i);
-          Eigen::Index neighbor_info_end_idx =
-              neighborhood_info_boundaries_(i + 1);
-
-          for (Eigen::Index j = neighbor_info_start_idx;
-               j < neighbor_info_end_idx; ++j) {
-            Eigen::Index neighbor_idx = neighborhood_info_(0, j);
-            Eigen::Index coef_idx = neighborhood_info_(1, j);
-
-            filtered_signals.col(i) +=
-                signals_.col(neighbor_idx) * neighbor_pair_weights(coef_idx);
-          }
-
-          if (param.normalize_iterates) {
-            filtered_signals.col(i).normalize();
-          } else {
-            filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
-          }
+        if (param.normalize_iterates) {
+          filtered_signals.col(i).normalize();
+        } else {
+          filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
         }
       }
+      // }
 
       signals_ = filtered_signals;
 
@@ -645,22 +746,22 @@ protected:
   int signal_count_; // Number of signals
 
   Eigen::MatrixXd
-      signals_; // Signals to be filtered. Represented in homogeneous form when
-                // there is no normalization constraint
+      signals_; // Signals to be filtered. Represented in homogeneous form
+                // when there is no normalization constraint
   Eigen::VectorXd area_weights_; // Area weights for each element
 
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
                                        // pair of neighboring elements
   Eigen::VectorXd
-      precomputed_area_spatial_guidance_weights_; // Precomputed weights (area,
-                                                  // spatial Gaussian and
-                                                  // guidance Gaussian) for
-                                                  // neighboring pairs
+      precomputed_area_spatial_guidance_weights_; // Precomputed weights
+                                                  // (area, spatial Gaussian
+                                                  // and guidance Gaussian)
+                                                  // for neighboring pairs
 
   // The neighborhood information for each signal element is stored as
   // contiguous columns within the neighborhood_info_ matrix For each column,
-  // the first element is the index of a neighboring element, the second one is
-  // the corresponding address within array neighboring_pairs_
+  // the first element is the index of a neighboring element, the second one
+  // is the corresponding address within array neighboring_pairs_
   Matrix2XIdx neighborhood_info_;
   VectorXIdx neighborhood_info_boundaries_; // Boundary positions for the
                                             // neighborhood information segments
@@ -746,9 +847,9 @@ protected:
     // Call kernel function to calculate precomputed area spatial guidance
     // weights
     kernel_calculate_weights<<<blocksPerGrid, threadsPerBlock>>>(
-        n_neighbor_pairs, dev_neighboring_pairs, dev_neighbor_dists,
-        dev_area_weights, h_spatial, h_guidance, dev_guidance,
-        dev_area_spatial_weights,
+        n_neighbor_pairs, guidance.rows(), dev_neighboring_pairs,
+        dev_neighbor_dists, dev_area_weights, h_spatial, h_guidance,
+        dev_guidance, dev_area_spatial_weights,
         dev_precomputed_area_spatial_guidance_weights);
 
     // Check for errors
@@ -814,7 +915,8 @@ protected:
 
   double target_function(const Parameters &param,
                          const Eigen::MatrixXd &init_signals) {
-    // Compute regularizer term, using the contribution from each neighbor pair
+    // Compute regularizer term, using the contribution from each neighbor
+    // pair
     Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
     Eigen::VectorXd pair_values(n_neighbor_pairs);
     pair_values.setZero();
