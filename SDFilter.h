@@ -383,7 +383,7 @@ void convert_from_gpu_memory(int *dev_matrix, Eigen::Matrix2Xi &matrix) {
   cudaFree(dev_matrix);
 }
 
-__global__ void kernel_calculate_weights(
+__global__ void kernel_calculate_spatial_guidance_weights(
     int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
     double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
     double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
@@ -413,7 +413,7 @@ __global__ void kernel_calculate_weights(
 }
 
 // Define a CUDA kernel for the first loop
-__global__ void calculateWeightsKernel(
+__global__ void kernel_calculate_neighbor_pair_weight(
     const int n_neighbor_pairs, const int signal_dim, const double h,
     const Eigen::Index *dev_neighboring_pairs,
     const double *dev_precomputed_area_spatial_guidance_weights,
@@ -597,7 +597,8 @@ protected:
 
       // int block_size = 256;
       // int grid_size_weights = (n_neighbor_pairs + block_size - 1) /
-      // block_size; calculateWeightsKernel<<<grid_size_weights, block_size>>>(
+      // block_size; kernel_calculate_neighbor_pair_weight<<<grid_size_weights,
+      // block_size>>>(
       //     n_neighbor_pairs, signals_.cols(), h, dev_neighboring_pairs,
       //     dev_precomputed_area_spatial_guidance_weights, dev_signals,
       //     dev_neighbor_pair_weights);
@@ -846,7 +847,8 @@ protected:
 
     // Call kernel function to calculate precomputed area spatial guidance
     // weights
-    kernel_calculate_weights<<<blocksPerGrid, threadsPerBlock>>>(
+    kernel_calculate_spatial_guidance_weights<<<blocksPerGrid,
+                                                threadsPerBlock>>>(
         n_neighbor_pairs, guidance.rows(), dev_neighboring_pairs,
         dev_neighbor_dists, dev_area_weights, h_spatial, h_guidance,
         dev_guidance, dev_area_spatial_weights,
