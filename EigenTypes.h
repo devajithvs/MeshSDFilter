@@ -38,6 +38,9 @@
 namespace SDFilter {
 
 // Define eigen matrix types
+typedef long int size_s;
+
+// Define eigen matrix types
 typedef Eigen::Matrix<double, 3, Eigen::Dynamic> Matrix3X;
 typedef Eigen::Matrix<double, 2, Eigen::Dynamic> Matrix2X;
 typedef Eigen::Matrix<int, 2, Eigen::Dynamic> Matrix2Xi;

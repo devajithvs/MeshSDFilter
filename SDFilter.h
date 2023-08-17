@@ -263,17 +263,86 @@ protected:
   }
 };
 
-void convert_to_gpu_memory(const Eigen::Matrix2Xi &matrix,
-                           Eigen::Index **dev_matrix) {
+void print_cuda_errors() {
+  cudaError_t cudaError = cudaGetLastError();
+  if (cudaError != cudaSuccess) {
+    std::cerr << "CUDA kernel launch error: " << cudaGetErrorString(cudaError)
+              << std::endl;
+  }
+}
+
+// void convert_to_gpu_memory_special(
+//     Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> &vector, int **dev_vector)
+//     {
+//   // Calculate total size of the vector
+//   int totalSize = vector.size();
+
+//   // Allocate memory on the GPU
+//   cudaMalloc((void **)dev_vector, totalSize * sizeof(int));
+
+//   // Allocate memory on the CPU to store data from the GPU
+//   std::vector<int> host_vector(totalSize);
+
+//   // Assign the data from the host_vector to the Eigen matrix
+//   for (int j = 0; j < totalSize; ++j) {
+//     host_vector.push_back(vector(j));
+//   }
+
+//   // Copy data from the CPU to the GPU
+//   cudaMemcpy(*dev_vector, host_vector.data(), totalSize * sizeof(int),
+//              cudaMemcpyHostToDevice);
+// }
+
+void convert_to_gpu_memory_special(
+    Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> &matrix, int **dev_matrix) {
   // Calculate total size of the matrix
   int totalSize = matrix.rows() * matrix.cols();
 
   // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(double));
+  cudaMalloc((void **)dev_matrix, totalSize * sizeof(int));
+
+  // Allocate memory on the CPU to store data from the GPU
+  int *host_matrix = new int[totalSize];
+
+  // Assign the data from the host_matrix to the Eigen matrix
+  for (int i = 0; i < matrix.rows(); ++i) {
+    for (int j = 0; j < matrix.cols(); ++j) {
+      // host_matrix[i * matrix.cols() + j] = matrix(i, j);
+      host_matrix[i + matrix.rows() * j] = matrix(i, j);
+    }
+  }
 
   // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(double),
+  cudaMemcpy(*dev_matrix, host_matrix, totalSize * sizeof(int),
              cudaMemcpyHostToDevice);
+
+  delete[] host_matrix;
+}
+
+void convert_to_gpu_memory_special(
+    Eigen::Matrix<Eigen::Index, 2, Eigen::Dynamic> &matrix, int **dev_matrix) {
+  // Calculate total size of the matrix
+  int totalSize = matrix.rows() * matrix.cols();
+
+  // Allocate memory on the GPU
+  cudaMalloc((void **)dev_matrix, totalSize * sizeof(int));
+
+  // Allocate memory on the CPU to store data from the GPU
+  int *host_matrix = new int[totalSize];
+
+  // Assign the data from the host_matrix to the Eigen matrix
+  for (int i = 0; i < matrix.rows(); ++i) {
+    for (int j = 0; j < matrix.cols(); ++j) {
+      // host_matrix[i * matrix.cols() + j] = matrix(i, j);
+      host_matrix[i + matrix.rows() * j] = matrix(i, j);
+    }
+  }
+
+  // Copy data from the CPU to the GPU
+  cudaMemcpy(*dev_matrix, host_matrix, totalSize * sizeof(int),
+             cudaMemcpyHostToDevice);
+
+  delete[] host_matrix;
 }
 
 void convert_to_gpu_memory(const Eigen::MatrixXd &matrix, double **dev_matrix) {
@@ -358,31 +427,6 @@ void convert_from_gpu_memory(double *dev_vector, Eigen::VectorXd &vector) {
   cudaFree(dev_vector);
 }
 
-void convert_from_gpu_memory(int *dev_matrix, Eigen::Matrix2Xi &matrix) {
-  int rows = matrix.rows();
-  int cols = matrix.cols();
-  int totalSize = rows * cols;
-
-  // Allocate memory on the CPU to store data from the GPU
-  int *host_matrix = new int[totalSize];
-
-  // Copy data from the GPU to the CPU
-  cudaMemcpy(host_matrix, dev_matrix, totalSize * sizeof(int),
-             cudaMemcpyDeviceToHost);
-
-  // Assign the data from the host_matrix to the Eigen matrix
-  for (int i = 0; i < rows; ++i) {
-    for (int j = 0; j < cols; ++j) {
-      matrix(i, j) = host_matrix[i * cols + j];
-    }
-  }
-
-  // Free the CPU memory
-  delete[] host_matrix;
-  // Free the GPU memory
-  cudaFree(dev_matrix);
-}
-
 __global__ void kernel_calculate_spatial_guidance_weights(
     int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
     double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
@@ -412,7 +456,6 @@ __global__ void kernel_calculate_spatial_guidance_weights(
   }
 }
 
-// Define a CUDA kernel for the first loop
 __global__ void kernel_calculate_neighbor_pair_weights(
     int n_neighbor_pairs, int signal_dim, double h, int *dev_neighboring_pairs,
     double *dev_precomputed_area_spatial_guidance_weights, double *dev_signals,
@@ -436,46 +479,76 @@ __global__ void kernel_calculate_neighbor_pair_weights(
   }
 }
 
-// // Define a CUDA kernel for the second loop
-// __global__ void calculateFilteredSignalsKernel(
-//     const int signal_count, const int signal_dim,
-//     const Eigen::Index *neighborhood_info_boundaries,
-//     const Eigen::Index *neighborhood_info, const float
-//     *neighbor_pair_weights, const float *signals, float *filtered_signals,
-//     bool normalize_iterates) {
-//   int i = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (i < signal_count) {
-//     Eigen::Index neighbor_info_start_idx = neighborhood_info_boundaries[i];
-//     Eigen::Index neighbor_info_end_idx = neighborhood_info_boundaries[i + 1];
+__global__ void kernel_calculate_filtered_signals(
+    int signal_count, int signal_dim, int *dev_neighborhood_info_boundaries,
+    int *dev_neighborhood_info, double *dev_neighbor_pair_weights,
+    double *dev_signals, double *dev_filtered_signals) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < signal_count) {
+    int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+    int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
 
-//     for (Eigen::Index j = neighbor_info_start_idx; j < neighbor_info_end_idx;
-//          ++j) {
-//       Eigen::Index neighbor_idx = neighborhood_info[j];
-//       Eigen::Index coef_idx = neighborhood_info[j + neighbor_info.size()];
+    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+      int neighbor_idx = dev_neighborhood_info[2 * j];
+      int coef_idx = dev_neighborhood_info[2 * j + 1];
 
-//       atomicAdd(&filtered_signals[i * signal_dim + neighbor_idx],
-//                 signals[neighbor_idx] * neighbor_pair_weights[coef_idx]);
-//     }
+      for (int k = 0; k < signal_dim; ++k) {
+        dev_filtered_signals[k + signal_dim * i] +=
+            dev_signals[k + signal_dim * neighbor_idx] *
+            dev_neighbor_pair_weights[coef_idx];
+      }
+    }
 
-//     if (normalize_iterates) {
-//       float sum = 0.0f;
-//       for (int k = 0; k < signal_dim; ++k) {
-//         sum += filtered_signals[i * signal_dim + k] *
-//                filtered_signals[i * signal_dim + k];
+    // if (normalize_iterates) {
+    double sum = 0.0;
+    for (int k = 0; k < signal_dim; ++k) {
+      sum += dev_filtered_signals[i * signal_dim + k] *
+             dev_filtered_signals[i * signal_dim + k];
+    }
+    sum = sqrt(sum);
+    for (int k = 0; k < signal_dim; ++k) {
+      dev_filtered_signals[i * signal_dim + k] /= sum;
+    }
+    // } else {
+    //   filtered_signals[i * signal_dim + signal_dim] =
+    //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
+    //           ? filtered_signals[i * signal_dim + signal_dim]
+    //           : 1.0f;
+    //   for (int k = 0; k < signal_dim; ++k) {
+    //     filtered_signals[i * signal_dim + k] /=
+    //         filtered_signals[i * signal_dim + signal_dim];
+    //   }
+    // }
+  }
+}
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, int signal_dim, int *dev_neighborhood_info_boundaries,
+//     int *dev_neighborhood_info, double *dev_neighbor_pair_weights,
+//     double *dev_signals, double *dev_filtered_signals) {
+//   int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+//   if (k < signal_dim) {
+//     for (int i = 0; i < signal_count; ++i) {
+//       int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//       int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+//       double filtered_sum = 0.0;
+
+//       for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+//         int neighbor_idx = dev_neighborhood_info[2 * j];
+//         int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+//         // filtered_sum += dev_signals[k + signal_count * neighbor_idx] *
+//         //                 dev_neighbor_pair_weights[coef_idx];
+
+//         filtered_sum +=
+//             dev_signals[k + signal_count] *
+//             dev_neighbor_pair_weights[coef_idx];
 //       }
-//       sum = sqrtf(sum);
-//       for (int k = 0; k < signal_dim; ++k) {
-//         filtered_signals[i * signal_dim + k] /= sum;
-//       }
-//     } else {
-//       filtered_signals[i * signal_dim + signal_dim] =
-//           filtered_signals[i * signal_dim + signal_dim] != 0.0f
-//               ? filtered_signals[i * signal_dim + signal_dim]
-//               : 1.0f;
-//       for (int k = 0; k < signal_dim; ++k) {
-//         filtered_signals[i * signal_dim + k] /=
-//             filtered_signals[i * signal_dim + signal_dim];
-//       }
+
+//       // dev_filtered_signals[k + signal_count * i] = filtered_sum;
+//       dev_filtered_signals[k + i] = filtered_sum;
 //     }
 //   }
 // }
@@ -597,20 +670,49 @@ protected:
 
       int block_size = 256;
       int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
+      int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
+
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
 
-      // Check for errors
-      cudaError_t cudaError = cudaGetLastError();
-      if (cudaError != cudaSuccess) {
-        std::cerr << "CUDA kernel launch error: "
-                  << cudaGetErrorString(cudaError) << std::endl;
-      }
+      print_cuda_errors();
+      // convert_from_gpu_memory(dev_neighbor_pair_weights,
+      // neighbor_pair_weights);
 
       cudaFree(dev_neighboring_pairs);
       cudaFree(dev_precomputed_area_spatial_guidance_weights);
+
+      // Break
+      // convert_to_gpu_memory(neighbor_pair_weights,
+      // &dev_neighbor_pair_weights);
+
+      // int *dev_neighborhood_info_boundaries;
+      // convert_to_gpu_memory_special(neighborhood_info_boundaries_,
+      //                               &dev_neighborhood_info_boundaries);
+      // int *dev_neighborhood_info;
+      // convert_to_gpu_memory_special(neighborhood_info_,
+      // &dev_neighborhood_info);
+
+      // double *dev_filtered_signals;
+      // convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
+
+      // kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
+      //     signal_count_, signals_.rows(), dev_neighborhood_info_boundaries,
+      //     dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
+      //     dev_filtered_signals);
+
+      // print_cuda_errors();
+
+      // convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
+
+      // cudaFree(dev_neighborhood_info_boundaries);
+      // cudaFree(dev_neighborhood_info);
+
+      // End here
+      // cudaFree(dev_neighbor_pair_weights);
+
       cudaFree(dev_signals);
 
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
@@ -636,7 +738,6 @@ protected:
           filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
         }
       }
-      // }
 
       signals_ = filtered_signals;
 
