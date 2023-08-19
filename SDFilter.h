@@ -206,44 +206,42 @@ kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
   }
 }
 
-// __global__ void
-// kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
-//                                   double *dev_signals, double
-//                                   *dev_prev_signals, double
-//                                   *dev_area_weights, double
-//                                   *dev_var_disp_sqrnorm) {
-//   extern __shared__ double shared_mem[];
+__global__ void kernel_calculate_var_disp_sqrnorm_opt(
+    int signal_count, Eigen::Index signal_dim, double *dev_signals,
+    double *dev_prev_signals, double *dev_area_weights,
+    double *dev_var_disp_sqrnorm) {
+  extern __shared__ double shared_mem[];
 
-//   int i = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (i < signal_count) {
-//     double sqrNorm = 0.0;
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < signal_count) {
+    double sqrNorm = 0.0;
 
-//     for (int j = threadIdx.y; j < signal_dim; j += blockDim.y) {
-//       double diff = dev_signals[i * signal_dim + j] -
-//                     dev_prev_signals[i * signal_dim + j];
-//       sqrNorm += diff * diff;
-//     }
+    for (int j = threadIdx.y; j < signal_dim; j += blockDim.y) {
+      double diff = dev_signals[i * signal_dim + j] -
+                    dev_prev_signals[i * signal_dim + j];
+      sqrNorm += diff * diff;
+    }
 
-//     // Store intermediate results in shared memory
-//     shared_mem[threadIdx.y * blockDim.x + threadIdx.x] = sqrNorm;
-//     __syncthreads();
+    // Store intermediate results in shared memory
+    shared_mem[threadIdx.y * blockDim.x + threadIdx.x] = sqrNorm;
+    __syncthreads();
 
-//     // Perform parallel reduction using shared memory
-//     for (int s = blockDim.y / 2; s > 0; s >>= 1) {
-//       if (threadIdx.y < s) {
-//         shared_mem[threadIdx.y * blockDim.x + threadIdx.x] +=
-//             shared_mem[(threadIdx.y + s) * blockDim.x + threadIdx.x];
-//       }
-//       __syncthreads();
-//     }
+    // Perform parallel reduction using shared memory
+    for (int s = blockDim.y / 2; s > 0; s >>= 1) {
+      if (threadIdx.y < s) {
+        shared_mem[threadIdx.y * blockDim.x + threadIdx.x] +=
+            shared_mem[(threadIdx.y + s) * blockDim.x + threadIdx.x];
+      }
+      __syncthreads();
+    }
 
-//     // Write final result to global memory
-//     if (threadIdx.y == 0) {
-//       atomicAdd(dev_var_disp_sqrnorm,
-//                 dev_area_weights[i] * shared_mem[threadIdx.x]);
-//     }
-//   }
-// }
+    // Write final result to global memory
+    if (threadIdx.y == 0) {
+      atomicAdd(dev_var_disp_sqrnorm,
+                dev_area_weights[i] * shared_mem[threadIdx.x]);
+    }
+  }
+}
 
 class Parameters {
 public:
@@ -566,16 +564,33 @@ protected:
     Eigen::Index *dev_neighborhood_info;
     convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
 
+    double *dev_signals;
+    convert_to_gpu_memory(signals_, &dev_signals);
+
+    double *dev_var_disp_sqrnorm;
+    cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(double));
+
+    double *dev_area_weights;
+    convert_to_gpu_memory(area_weights_, &dev_area_weights);
+
     int block_size = 256;
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
     int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
 
-    for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
-      prev_signals = signals_;
-      filtered_signals = weighted_init_signals;
+    dim3 threads_per_block(
+        32,
+        8); // You can adjust these values based on your GPU's architecture
+    int grid_size_sqrnorm =
+        (signals_.cols() + threads_per_block.x - 1) / threads_per_block.x;
 
-      double *dev_signals;
-      convert_to_gpu_memory(signals_, &dev_signals);
+    int shared_size =
+        threads_per_block.x * threads_per_block.y * sizeof(double);
+
+    for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
+      double *dev_prev_signals = dev_signals;
+
+      double *dev_filtered_signals;
+      convert_to_gpu_memory(weighted_init_signals, &dev_filtered_signals);
 
       // convert neighborhood pairs and neighbor distances to GPU memory
       double *dev_neighbor_pair_weights;
@@ -588,9 +603,6 @@ protected:
 
       print_cuda_errors();
 
-      double *dev_filtered_signals;
-      convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
-
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
@@ -598,41 +610,22 @@ protected:
 
       print_cuda_errors();
 
-      double *dev_area_weights;
-      convert_to_gpu_memory(area_weights_, &dev_area_weights);
-
-      double *dev_var_disp_sqrnorm;
-      cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(double));
       cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
 
-      grid_size_filtered = (signals_.cols() + block_size - 1) / block_size;
+      dev_signals = dev_filtered_signals;
 
-      dim3 threadsPerBlock(
-          32,
-          8); // You can adjust these values based on your GPU's architecture
-      int blocksPerGrid =
-          (signals_.cols() + threadsPerBlock.x - 1) / threadsPerBlock.x;
-
-      int sharedMemSize =
-          threadsPerBlock.x * threadsPerBlock.y * sizeof(double);
-
-      kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
-          // kernel_calculate_var_disp_sqrnorm<<<blocksPerGrid, threadsPerBlock,
-          //                                     sharedMemSize>>>(
-          signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
+      // kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
+      kernel_calculate_var_disp_sqrnorm_opt<<<grid_size_sqrnorm,
+                                              threads_per_block, shared_size>>>(
+          signal_count_, signal_dim_, dev_signals, dev_prev_signals,
           dev_area_weights, dev_var_disp_sqrnorm);
 
       double var_disp_sqrnorm;
       cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
                  cudaMemcpyDeviceToHost);
-      cudaFree(dev_var_disp_sqrnorm);
 
-      convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
-
-      cudaFree(dev_signals);
-
-      signals_ = filtered_signals;
+      cudaFree(dev_prev_signals);
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
@@ -657,6 +650,10 @@ protected:
 
     cudaFree(dev_neighborhood_info_boundaries);
     cudaFree(dev_neighborhood_info);
+
+    convert_from_gpu_memory(dev_signals, signals_);
+    cudaFree(dev_var_disp_sqrnorm);
+    cudaFree(dev_area_weights);
   }
 
   // Linear solver for symmetric positive definite matrix,
