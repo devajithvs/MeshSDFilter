@@ -164,7 +164,6 @@ __global__ void kernel_calculate_filtered_signals(
       }
     }
 
-    // if (normalize_iterates) {
     double sum = 0.0;
     for (int k = 0; k < signal_dim; ++k) {
       sum += dev_filtered_signals[i * signal_dim + k] *
@@ -174,6 +173,7 @@ __global__ void kernel_calculate_filtered_signals(
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] /= sum;
     }
+    // if (normalize_iterates) {
     // } else {
     //   filtered_signals[i * signal_dim + signal_dim] =
     //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
@@ -580,9 +580,9 @@ protected:
     double *dev_weighted_init_signals;
     convert_to_gpu_memory(weighted_init_signals, &dev_weighted_init_signals);
 
-    // double *dev_filtered_signals;
-    // cudaMalloc((void**)&dev_filtered_signals, weighted_init_signals.size() *
-    // sizeof(double));
+    double *dev_filtered_signals;
+    cudaMalloc((void **)&dev_filtered_signals,
+               weighted_init_signals.size() * sizeof(double));
 
     int block_size = 256;
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
@@ -598,40 +598,33 @@ protected:
         threads_per_block.x * threads_per_block.y * sizeof(double);
 
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
-      double *dev_prev_signals = dev_signals;
-
-      double *dev_filtered_signals;
-      convert_to_gpu_memory(weighted_init_signals, &dev_filtered_signals);
+      cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
+      cudaMemcpy(dev_filtered_signals, dev_weighted_init_signals,
+                 weighted_init_signals.size() * sizeof(double),
+                 cudaMemcpyDeviceToDevice);
 
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
 
-      print_cuda_errors();
-
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
           dev_filtered_signals);
 
-      print_cuda_errors();
-
-      cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
-
-      dev_signals = dev_filtered_signals;
-
       // kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
       kernel_calculate_var_disp_sqrnorm_opt<<<grid_size_sqrnorm,
                                               threads_per_block, shared_size>>>(
-          signal_count_, signal_dim_, dev_signals, dev_prev_signals,
+          signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
           dev_area_weights, dev_var_disp_sqrnorm);
 
       double var_disp_sqrnorm;
       cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
                  cudaMemcpyDeviceToHost);
 
-      cudaFree(dev_prev_signals);
+      print_cuda_errors();
+      std::swap(dev_signals, dev_filtered_signals);
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
