@@ -271,28 +271,6 @@ void print_cuda_errors() {
   }
 }
 
-// void convert_to_gpu_memory_special(
-//     Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> &vector, int **dev_vector)
-//     {
-//   // Calculate total size of the vector
-//   int totalSize = vector.size();
-
-//   // Allocate memory on the GPU
-//   cudaMalloc((void **)dev_vector, totalSize * sizeof(int));
-
-//   // Allocate memory on the CPU to store data from the GPU
-//   std::vector<int> host_vector(totalSize);
-
-//   // Assign the data from the host_vector to the Eigen matrix
-//   for (int j = 0; j < totalSize; ++j) {
-//     host_vector.push_back(vector(j));
-//   }
-
-//   // Copy data from the CPU to the GPU
-//   cudaMemcpy(*dev_vector, host_vector.data(), totalSize * sizeof(int),
-//              cudaMemcpyHostToDevice);
-// }
-
 void convert_to_gpu_memory_special(
     Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> &matrix,
     Eigen::Index **dev_matrix) {
@@ -370,10 +348,8 @@ void convert_from_gpu_memory(double *dev_matrix, Eigen::MatrixXd &matrix) {
              cudaMemcpyDeviceToHost);
 
   // Assign the data from the host_matrix to the Eigen matrix
-  for (int i = 0; i < rows; ++i) {
-    for (int j = 0; j < cols; ++j) {
-      matrix(i, j) = host_matrix[i * cols + j];
-    }
+  for (int i = 0; i < totalSize; ++i) {
+    matrix.data()[i] = host_matrix[i];
   }
 
   // Free the CPU memory
@@ -664,27 +640,27 @@ protected:
       // convert_to_gpu_memory(neighbor_pair_weights,
       // &dev_neighbor_pair_weights);
 
-      // Eigen::Index *dev_neighborhood_info_boundaries;
-      // convert_to_gpu_memory_special(neighborhood_info_boundaries_,
-      //                               &dev_neighborhood_info_boundaries);
-      // Eigen::Index *dev_neighborhood_info;
-      // convert_to_gpu_memory_special(neighborhood_info_,
-      // &dev_neighborhood_info);
+      Eigen::Index *dev_neighborhood_info_boundaries;
+      convert_to_gpu_memory_special(neighborhood_info_boundaries_,
+                                    &dev_neighborhood_info_boundaries);
+      Eigen::Index *dev_neighborhood_info;
+      convert_to_gpu_memory_special(neighborhood_info_,
+      &dev_neighborhood_info);
 
-      // double *dev_filtered_signals;
-      // convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
+      double *dev_filtered_signals;
+      convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
 
-      // kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
-      //     signal_count_, signals_.rows(), dev_neighborhood_info_boundaries,
-      //     dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
-      //     dev_filtered_signals);
+      kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
+          signal_count_, signals_.rows(), dev_neighborhood_info_boundaries,
+          dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
+          dev_filtered_signals);
 
-      // print_cuda_errors();
+      print_cuda_errors();
 
-      // convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
+      convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
 
-      // cudaFree(dev_neighborhood_info_boundaries);
-      // cudaFree(dev_neighborhood_info);
+      cudaFree(dev_neighborhood_info_boundaries);
+      cudaFree(dev_neighborhood_info);
 
       // End here
       // cudaFree(dev_neighbor_pair_weights);
@@ -692,37 +668,37 @@ protected:
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
       cudaFree(dev_signals);
 
-      OMP_FOR
-      for (int i = 0; i < signal_count_; ++i) {
-        int neighbor_info_start_idx = neighborhood_info_boundaries_.data()[i];
-        int neighbor_info_end_idx = neighborhood_info_boundaries_.data()[i + 1];
+      // OMP_FOR
+      // for (int i = 0; i < signal_count_; ++i) {
+      //   int neighbor_info_start_idx = neighborhood_info_boundaries_.data()[i];
+      //   int neighbor_info_end_idx = neighborhood_info_boundaries_.data()[i + 1];
 
-        for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-          int neighbor_idx = neighborhood_info_.data()[2 * j];
-          int coef_idx = neighborhood_info_.data()[1 + 2 * j];
+      //   for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+      //     int neighbor_idx = neighborhood_info_.data()[2 * j];
+      //     int coef_idx = neighborhood_info_.data()[1 + 2 * j];
 
-          for (int k = 0; k < signals_.rows(); ++k) {
-            filtered_signals.data()[k + signals_.rows() * i] +=
-                signals_.data()[k + signals_.rows() * neighbor_idx] *
-                neighbor_pair_weights.data()[coef_idx];
-          }
-        }
+      //     for (int k = 0; k < signals_.rows(); ++k) {
+      //       filtered_signals.data()[k + signals_.rows() * i] +=
+      //           signals_.data()[k + signals_.rows() * neighbor_idx] *
+      //           neighbor_pair_weights.data()[coef_idx];
+      //     }
+      //   }
 
-        if (param.normalize_iterates) {
-          double sum = 0.0;
-          for (int k = 0; k < signals_.rows(); ++k) {
-            sum += filtered_signals.data()[i * signals_.rows() + k] *
-                   filtered_signals.data()[i * signals_.rows() + k];
-          }
-          sum = sqrt(sum);
-          for (int k = 0; k < signals_.rows(); ++k) {
-            filtered_signals.data()[i * signals_.rows() + k] /= sum;
-          }
+      //   if (param.normalize_iterates) {
+      //     double sum = 0.0;
+      //     for (int k = 0; k < signals_.rows(); ++k) {
+      //       sum += filtered_signals.data()[i * signals_.rows() + k] *
+      //              filtered_signals.data()[i * signals_.rows() + k];
+      //     }
+      //     sum = sqrt(sum);
+      //     for (int k = 0; k < signals_.rows(); ++k) {
+      //       filtered_signals.data()[i * signals_.rows() + k] /= sum;
+      //     }
 
-        } else {
-          filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
-        }
-      }
+      //   } else {
+      //     filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
+      //   }
+      // }
 
       // OMP_FOR
       // for (int i = 0; i < signal_count_; ++i) {
