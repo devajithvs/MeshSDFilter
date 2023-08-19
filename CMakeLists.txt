@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.3)
 
 project(SDFilter LANGUAGES CXX CUDA)
 
@@ -104,7 +104,8 @@ target_link_libraries(MeshDenoiser MeshSDLibrary)
 set_target_properties(
     MeshSDFilter
     PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON)
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_ARCHITECTURES 80)
 
 if(OPENMP_FOUND)
   #target_compile_options(MeshSDLibrary PUBLIC "$<$<CONFIG:RELEASE>:${OpenMP_CXX_FLAGS}>")

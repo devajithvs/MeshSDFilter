@@ -32,6 +32,11 @@
 #ifndef ITERATIVESDFILTER_H_
 #define ITERATIVESDFILTER_H_
 
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
+#else
+__device__ double atomicAdd(double *a, double b) { return b; }
+#endif
+
 #include "EigenTypes.h"
 #include <algorithm>
 #include <cassert>
@@ -182,56 +187,61 @@ __global__ void kernel_calculate_filtered_signals(
   }
 }
 
-__global__ void calculate_var_disp_sqrnorm_kernel(
-    double *dev_signals, double *dev_prev_signals, double *dev_area_weights,
-    double *dev_var_disp_sqrnorm, size_t signal_dim, size_t signal_count) {
+__global__ void
+kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
+                                  double *dev_signals, double *dev_prev_signals,
+                                  double *dev_area_weights,
+                                  double *dev_var_disp_sqrnorm) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (i < signal_dim) {
-    double column_sum = 0.0;
-    for (size_t j = 0; j < signal_count; ++j) {
-      double diff = dev_signals[j * signal_dim + i] -
-                    dev_prev_signals[j * signal_dim + i];
-      column_sum += diff * diff;
+  if (i < signal_count) {
+    double sqrnorm = 0.0;
+
+    for (int j = 0; j < signal_dim; ++j) {
+      double diff = dev_signals[i * signal_dim + j] -
+                    dev_prev_signals[i * signal_dim + j];
+      sqrnorm += diff * diff;
     }
-    atomicAdd(dev_var_disp_sqrnorm, dev_area_weights[i] * column_sum);
+    atomicAdd(dev_var_disp_sqrnorm, dev_area_weights[i] * sqrnorm);
   }
 }
 
-// __global__ void calculate_var_disp_sqrnorm_kernel(
-//     double *dev_signals,
-//     double *dev_prev_signals,
-//     double *dev_area_weights,
-//     double *dev_var_disp_sqrnorm,
-//     size_t signal_dim,
-//     size_t signal_count) {
-//   __shared__ double shared_column_sum[256]; // Adjust this size based on
-//   blockDim.x
+// __global__ void
+// kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
+//                                   double *dev_signals, double
+//                                   *dev_prev_signals, double
+//                                   *dev_area_weights, double
+//                                   *dev_var_disp_sqrnorm) {
+//   extern __shared__ double shared_mem[];
 
 //   int i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i < signal_count) {
+//     double sqrNorm = 0.0;
 
-//   if (threadIdx.x < signal_dim) {
-//     double column_sum = 0.0;
-//     for (size_t j = 0; j < signal_count; ++j) {
-//       double diff = dev_signals[j * signal_dim + i] - dev_prev_signals[j *
-//       signal_dim + i]; column_sum += diff * diff;
+//     for (int j = threadIdx.y; j < signal_dim; j += blockDim.y) {
+//       double diff = dev_signals[i * signal_dim + j] -
+//                     dev_prev_signals[i * signal_dim + j];
+//       sqrNorm += diff * diff;
 //     }
-//     shared_column_sum[threadIdx.x] = dev_area_weights[i] * column_sum;
-//   }
 
-//   __syncthreads();
-
-//   // Perform parallel reduction
-//   for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-//     if (threadIdx.x < stride) {
-//       shared_column_sum[threadIdx.x] += shared_column_sum[threadIdx.x +
-//       stride];
-//     }
+//     // Store intermediate results in shared memory
+//     shared_mem[threadIdx.y * blockDim.x + threadIdx.x] = sqrNorm;
 //     __syncthreads();
-//   }
 
-//   if (threadIdx.x == 0) {
-//     atomicAdd(dev_var_disp_sqrnorm, shared_column_sum[0]);
+//     // Perform parallel reduction using shared memory
+//     for (int s = blockDim.y / 2; s > 0; s >>= 1) {
+//       if (threadIdx.y < s) {
+//         shared_mem[threadIdx.y * blockDim.x + threadIdx.x] +=
+//             shared_mem[(threadIdx.y + s) * blockDim.x + threadIdx.x];
+//       }
+//       __syncthreads();
+//     }
+
+//     // Write final result to global memory
+//     if (threadIdx.y == 0) {
+//       atomicAdd(dev_var_disp_sqrnorm,
+//                 dev_area_weights[i] * shared_mem[threadIdx.x]);
+//     }
 //   }
 // }
 
@@ -582,21 +592,47 @@ protected:
       convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
 
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
-          signal_count_, signals_.rows(), dev_neighborhood_info_boundaries,
+          signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
           dev_filtered_signals);
 
       print_cuda_errors();
 
-      convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
+      double *dev_area_weights;
+      convert_to_gpu_memory(area_weights_, &dev_area_weights);
 
+      double *dev_var_disp_sqrnorm;
+      cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(double));
+      cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
+
+      grid_size_filtered = (signals_.cols() + block_size - 1) / block_size;
+
+      dim3 threadsPerBlock(
+          32,
+          8); // You can adjust these values based on your GPU's architecture
+      int blocksPerGrid =
+          (signals_.cols() + threadsPerBlock.x - 1) / threadsPerBlock.x;
+
+      int sharedMemSize =
+          threadsPerBlock.x * threadsPerBlock.y * sizeof(double);
+
+      kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
+          // kernel_calculate_var_disp_sqrnorm<<<blocksPerGrid, threadsPerBlock,
+          //                                     sharedMemSize>>>(
+          signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
+          dev_area_weights, dev_var_disp_sqrnorm);
+
+      double var_disp_sqrnorm;
+      cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
+                 cudaMemcpyDeviceToHost);
+      cudaFree(dev_var_disp_sqrnorm);
+
+      convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
+
       cudaFree(dev_signals);
 
       signals_ = filtered_signals;
-
-      double var_disp_sqrnorm =
-          area_weights_.dot((signals_ - prev_signals).colwise().squaredNorm());
 
       if (print_diagnostic_info_) {
         std::cout << "Iteration " << num_iter << ", Target function value "
