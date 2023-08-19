@@ -63,6 +63,178 @@
 
 namespace SDFilter {
 
+template <typename EigenType, typename T>
+void convert_to_gpu_memory(const EigenType &matrix, T **dev_matrix) {
+  // Calculate total size of the matrix
+  int totalSize = matrix.size();
+
+  // Allocate memory on the GPU
+  cudaMalloc((void **)dev_matrix, totalSize * sizeof(T));
+
+  // Copy data from the CPU to the GPU
+  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(T),
+             cudaMemcpyHostToDevice);
+}
+
+template <typename EigenType, typename T>
+void convert_from_gpu_memory(T *dev_matrix, EigenType &matrix) {
+  // Copy data from the GPU to the CPU
+  cudaMemcpy(matrix.data(), dev_matrix, matrix.size() * sizeof(T),
+             cudaMemcpyDeviceToHost);
+
+  // Free the GPU memory
+  cudaFree(dev_matrix);
+}
+
+__global__ void kernel_calculate_spatial_guidance_weights(
+    int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
+    double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
+    double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
+    double *dev_precomputed_area_spatial_guidance_weights) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n_neighbor_pairs) {
+    int idx1 = dev_neighboring_pairs[2 * i],
+        idx2 = dev_neighboring_pairs[2 * i + 1];
+    double d = dev_neighbor_dists[i];
+
+    dev_area_spatial_weights[i] =
+        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
+        exp(h_spatial * d * d);
+
+    // Calculate squaredNorm of guidance difference
+    double guidance_diff_norm_squared = 0.0;
+    for (int j = 0; j < guidance_dim; ++j) {
+      double diff = dev_guidance[j + guidance_dim * idx1] -
+                    dev_guidance[j + guidance_dim * idx2];
+      guidance_diff_norm_squared += diff * diff;
+    }
+
+    dev_precomputed_area_spatial_guidance_weights[i] =
+        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
+        exp(h_guidance * guidance_diff_norm_squared + h_spatial * d * d);
+  }
+}
+
+__global__ void kernel_calculate_neighbor_pair_weights(
+    int n_neighbor_pairs, int signal_dim, double h, int *dev_neighboring_pairs,
+    double *dev_precomputed_area_spatial_guidance_weights, double *dev_signals,
+    double *dev_neighbor_pair_weights) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n_neighbor_pairs) {
+    int idx1 = dev_neighboring_pairs[2 * i],
+        idx2 = dev_neighboring_pairs[2 * i + 1];
+
+    // Calculate squaredNorm of signal difference
+    double signal_diff_norm_squared = 0.0;
+    for (int j = 0; j < signal_dim; ++j) {
+      double diff = dev_signals[j + signal_dim * idx1] -
+                    dev_signals[j + signal_dim * idx2];
+      signal_diff_norm_squared += diff * diff;
+    }
+
+    dev_neighbor_pair_weights[i] =
+        dev_precomputed_area_spatial_guidance_weights[i] *
+        exp(h * signal_diff_norm_squared);
+  }
+}
+
+__global__ void kernel_calculate_filtered_signals(
+    int signal_count, Eigen::Index signal_dim,
+    Eigen::Index *dev_neighborhood_info_boundaries,
+    Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
+    double *dev_signals, double *dev_filtered_signals) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < signal_count) {
+    int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+    int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+      int neighbor_idx = dev_neighborhood_info[2 * j];
+      int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+      for (int k = 0; k < signal_dim; ++k) {
+        dev_filtered_signals[k + signal_dim * i] +=
+            dev_signals[k + signal_dim * neighbor_idx] *
+            dev_neighbor_pair_weights[coef_idx];
+      }
+    }
+
+    // if (normalize_iterates) {
+    double sum = 0.0;
+    for (int k = 0; k < signal_dim; ++k) {
+      sum += dev_filtered_signals[i * signal_dim + k] *
+             dev_filtered_signals[i * signal_dim + k];
+    }
+    sum = sqrt(sum);
+    for (int k = 0; k < signal_dim; ++k) {
+      dev_filtered_signals[i * signal_dim + k] /= sum;
+    }
+    // } else {
+    //   filtered_signals[i * signal_dim + signal_dim] =
+    //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
+    //           ? filtered_signals[i * signal_dim + signal_dim]
+    //           : 1.0f;
+    //   for (int k = 0; k < signal_dim; ++k) {
+    //     filtered_signals[i * signal_dim + k] /=
+    //         filtered_signals[i * signal_dim + signal_dim];
+    //   }
+    // }
+  }
+}
+
+__global__ void calculate_var_disp_sqrnorm_kernel(
+    double *dev_signals, double *dev_prev_signals, double *dev_area_weights,
+    double *dev_var_disp_sqrnorm, size_t signal_dim, size_t signal_count) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i < signal_dim) {
+    double column_sum = 0.0;
+    for (size_t j = 0; j < signal_count; ++j) {
+      double diff = dev_signals[j * signal_dim + i] -
+                    dev_prev_signals[j * signal_dim + i];
+      column_sum += diff * diff;
+    }
+    atomicAdd(dev_var_disp_sqrnorm, dev_area_weights[i] * column_sum);
+  }
+}
+
+// __global__ void calculate_var_disp_sqrnorm_kernel(
+//     double *dev_signals,
+//     double *dev_prev_signals,
+//     double *dev_area_weights,
+//     double *dev_var_disp_sqrnorm,
+//     size_t signal_dim,
+//     size_t signal_count) {
+//   __shared__ double shared_column_sum[256]; // Adjust this size based on
+//   blockDim.x
+
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+//   if (threadIdx.x < signal_dim) {
+//     double column_sum = 0.0;
+//     for (size_t j = 0; j < signal_count; ++j) {
+//       double diff = dev_signals[j * signal_dim + i] - dev_prev_signals[j *
+//       signal_dim + i]; column_sum += diff * diff;
+//     }
+//     shared_column_sum[threadIdx.x] = dev_area_weights[i] * column_sum;
+//   }
+
+//   __syncthreads();
+
+//   // Perform parallel reduction
+//   for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+//     if (threadIdx.x < stride) {
+//       shared_column_sum[threadIdx.x] += shared_column_sum[threadIdx.x +
+//       stride];
+//     }
+//     __syncthreads();
+//   }
+
+//   if (threadIdx.x == 0) {
+//     atomicAdd(dev_var_disp_sqrnorm, shared_column_sum[0]);
+//   }
+// }
+
 class Parameters {
 public:
   Parameters()
@@ -271,125 +443,6 @@ void print_cuda_errors() {
   }
 }
 
-template <typename EigenType, typename T>
-void convert_to_gpu_memory(const EigenType &matrix, T **dev_matrix) {
-  // Calculate total size of the matrix
-  int totalSize = matrix.size();
-
-  // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(T));
-
-  // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(T),
-             cudaMemcpyHostToDevice);
-}
-
-template <typename EigenType, typename T>
-void convert_from_gpu_memory(T *dev_matrix, EigenType &matrix) {
-  // Copy data from the GPU to the CPU
-  cudaMemcpy(matrix.data(), dev_matrix, matrix.size() * sizeof(T),
-             cudaMemcpyDeviceToHost);
-
-  // Free the GPU memory
-  cudaFree(dev_matrix);
-}
-
-__global__ void kernel_calculate_spatial_guidance_weights(
-    int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
-    double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
-    double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
-    double *dev_precomputed_area_spatial_guidance_weights) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n_neighbor_pairs) {
-    int idx1 = dev_neighboring_pairs[2 * i],
-        idx2 = dev_neighboring_pairs[2 * i + 1];
-    double d = dev_neighbor_dists[i];
-
-    dev_area_spatial_weights[i] =
-        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
-        exp(h_spatial * d * d);
-
-    // Calculate squaredNorm of guidance difference
-    double guidance_diff_norm_squared = 0.0;
-    for (int j = 0; j < guidance_dim; ++j) {
-      double diff = dev_guidance[j + guidance_dim * idx1] -
-                    dev_guidance[j + guidance_dim * idx2];
-      guidance_diff_norm_squared += diff * diff;
-    }
-
-    dev_precomputed_area_spatial_guidance_weights[i] =
-        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
-        exp(h_guidance * guidance_diff_norm_squared + h_spatial * d * d);
-  }
-}
-
-__global__ void kernel_calculate_neighbor_pair_weights(
-    int n_neighbor_pairs, int signal_dim, double h, int *dev_neighboring_pairs,
-    double *dev_precomputed_area_spatial_guidance_weights, double *dev_signals,
-    double *dev_neighbor_pair_weights) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n_neighbor_pairs) {
-    int idx1 = dev_neighboring_pairs[2 * i],
-        idx2 = dev_neighboring_pairs[2 * i + 1];
-
-    // Calculate squaredNorm of signal difference
-    double signal_diff_norm_squared = 0.0;
-    for (int j = 0; j < signal_dim; ++j) {
-      double diff = dev_signals[j + signal_dim * idx1] -
-                    dev_signals[j + signal_dim * idx2];
-      signal_diff_norm_squared += diff * diff;
-    }
-
-    dev_neighbor_pair_weights[i] =
-        dev_precomputed_area_spatial_guidance_weights[i] *
-        exp(h * signal_diff_norm_squared);
-  }
-}
-
-__global__ void kernel_calculate_filtered_signals(
-    int signal_count, Eigen::Index signal_dim,
-    Eigen::Index *dev_neighborhood_info_boundaries,
-    Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
-    double *dev_signals, double *dev_filtered_signals) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < signal_count) {
-    int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
-    int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
-
-    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-      int neighbor_idx = dev_neighborhood_info[2 * j];
-      int coef_idx = dev_neighborhood_info[2 * j + 1];
-
-      for (int k = 0; k < signal_dim; ++k) {
-        dev_filtered_signals[k + signal_dim * i] +=
-            dev_signals[k + signal_dim * neighbor_idx] *
-            dev_neighbor_pair_weights[coef_idx];
-      }
-    }
-
-    // if (normalize_iterates) {
-    double sum = 0.0;
-    for (int k = 0; k < signal_dim; ++k) {
-      sum += dev_filtered_signals[i * signal_dim + k] *
-             dev_filtered_signals[i * signal_dim + k];
-    }
-    sum = sqrt(sum);
-    for (int k = 0; k < signal_dim; ++k) {
-      dev_filtered_signals[i * signal_dim + k] /= sum;
-    }
-    // } else {
-    //   filtered_signals[i * signal_dim + signal_dim] =
-    //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
-    //           ? filtered_signals[i * signal_dim + signal_dim]
-    //           : 1.0f;
-    //   for (int k = 0; k < signal_dim; ++k) {
-    //     filtered_signals[i * signal_dim + k] /=
-    //         filtered_signals[i * signal_dim + signal_dim];
-    //   }
-    // }
-  }
-}
-
 class Timer {
 public:
   typedef int EventID;
@@ -496,6 +549,13 @@ protected:
     convert_to_gpu_memory(precomputed_area_spatial_guidance_weights_,
                           &dev_precomputed_area_spatial_guidance_weights);
 
+    Eigen::Index *dev_neighborhood_info_boundaries;
+    convert_to_gpu_memory(neighborhood_info_boundaries_,
+                          &dev_neighborhood_info_boundaries);
+
+    Eigen::Index *dev_neighborhood_info;
+    convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
+
     int block_size = 256;
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
     int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
@@ -518,12 +578,6 @@ protected:
 
       print_cuda_errors();
 
-      Eigen::Index *dev_neighborhood_info_boundaries;
-      convert_to_gpu_memory(neighborhood_info_boundaries_,
-                            &dev_neighborhood_info_boundaries);
-      Eigen::Index *dev_neighborhood_info;
-      convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
-
       double *dev_filtered_signals;
       convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
 
@@ -535,9 +589,6 @@ protected:
       print_cuda_errors();
 
       convert_from_gpu_memory(dev_filtered_signals, filtered_signals);
-
-      cudaFree(dev_neighborhood_info_boundaries);
-      cudaFree(dev_neighborhood_info);
 
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
       cudaFree(dev_signals);
@@ -567,6 +618,9 @@ protected:
 
     cudaFree(dev_neighboring_pairs);
     cudaFree(dev_precomputed_area_spatial_guidance_weights);
+
+    cudaFree(dev_neighborhood_info_boundaries);
+    cudaFree(dev_neighborhood_info);
   }
 
   // Linear solver for symmetric positive definite matrix,
