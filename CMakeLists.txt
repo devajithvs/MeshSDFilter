@@ -7,6 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
+# Set the C and C++ compilers to use CCache
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
+endif()
+
 
 # Additional compiler flags
 if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
@@ -78,6 +84,7 @@ add_executable(MeshSDFilter
   MeshNormalFilter.h
   MeshSDFilter.cu
 )
+target_compile_options(MeshSDFilter PRIVATE -g)
 target_link_libraries(MeshSDFilter MeshSDLibrary)
 
 
@@ -90,6 +97,7 @@ add_executable(MeshDenoiser
   MeshNormalDenoising.h
   MeshDenoiser.cu
 )
+target_compile_options(MeshDenoiser PRIVATE -g)
 target_link_libraries(MeshDenoiser MeshSDLibrary)
 
 
