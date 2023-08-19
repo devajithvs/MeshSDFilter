@@ -475,37 +475,6 @@ __global__ void kernel_calculate_filtered_signals(
   }
 }
 
-// __global__ void kernel_calculate_filtered_signals(
-//     int signal_count, int signal_dim, int *dev_neighborhood_info_boundaries,
-//     int *dev_neighborhood_info, double *dev_neighbor_pair_weights,
-//     double *dev_signals, double *dev_filtered_signals) {
-//   int k = blockIdx.x * blockDim.x + threadIdx.x;
-
-//   if (k < signal_dim) {
-//     for (int i = 0; i < signal_count; ++i) {
-//       int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
-//       int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
-
-//       double filtered_sum = 0.0;
-
-//       for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-//         int neighbor_idx = dev_neighborhood_info[2 * j];
-//         int coef_idx = dev_neighborhood_info[2 * j + 1];
-
-//         // filtered_sum += dev_signals[k + signal_count * neighbor_idx] *
-//         //                 dev_neighbor_pair_weights[coef_idx];
-
-//         filtered_sum +=
-//             dev_signals[k + signal_count] *
-//             dev_neighbor_pair_weights[coef_idx];
-//       }
-
-//       // dev_filtered_signals[k + signal_count * i] = filtered_sum;
-//       dev_filtered_signals[k + i] = filtered_sum;
-//     }
-//   }
-// }
-
 class Timer {
 public:
   typedef int EventID;
@@ -612,6 +581,10 @@ protected:
     convert_to_gpu_memory(precomputed_area_spatial_guidance_weights_,
                           &dev_precomputed_area_spatial_guidance_weights);
 
+    int block_size = 256;
+    int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
+    int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
+
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
       prev_signals = signals_;
       filtered_signals = weighted_init_signals;
@@ -623,22 +596,13 @@ protected:
       double *dev_neighbor_pair_weights;
       convert_to_gpu_memory(neighbor_pair_weights, &dev_neighbor_pair_weights);
 
-      int block_size = 256;
-      int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
-      int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
-
+      
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
 
       print_cuda_errors();
-      // convert_from_gpu_memory(dev_neighbor_pair_weights,
-      // neighbor_pair_weights);
-
-      // Break
-      // convert_to_gpu_memory(neighbor_pair_weights,
-      // &dev_neighbor_pair_weights);
 
       Eigen::Index *dev_neighborhood_info_boundaries;
       convert_to_gpu_memory_special(neighborhood_info_boundaries_,
@@ -662,66 +626,8 @@ protected:
       cudaFree(dev_neighborhood_info_boundaries);
       cudaFree(dev_neighborhood_info);
 
-      // End here
-      // cudaFree(dev_neighbor_pair_weights);
-
       convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
       cudaFree(dev_signals);
-
-      // OMP_FOR
-      // for (int i = 0; i < signal_count_; ++i) {
-      //   int neighbor_info_start_idx = neighborhood_info_boundaries_.data()[i];
-      //   int neighbor_info_end_idx = neighborhood_info_boundaries_.data()[i + 1];
-
-      //   for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-      //     int neighbor_idx = neighborhood_info_.data()[2 * j];
-      //     int coef_idx = neighborhood_info_.data()[1 + 2 * j];
-
-      //     for (int k = 0; k < signals_.rows(); ++k) {
-      //       filtered_signals.data()[k + signals_.rows() * i] +=
-      //           signals_.data()[k + signals_.rows() * neighbor_idx] *
-      //           neighbor_pair_weights.data()[coef_idx];
-      //     }
-      //   }
-
-      //   if (param.normalize_iterates) {
-      //     double sum = 0.0;
-      //     for (int k = 0; k < signals_.rows(); ++k) {
-      //       sum += filtered_signals.data()[i * signals_.rows() + k] *
-      //              filtered_signals.data()[i * signals_.rows() + k];
-      //     }
-      //     sum = sqrt(sum);
-      //     for (int k = 0; k < signals_.rows(); ++k) {
-      //       filtered_signals.data()[i * signals_.rows() + k] /= sum;
-      //     }
-
-      //   } else {
-      //     filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
-      //   }
-      // }
-
-      // OMP_FOR
-      // for (int i = 0; i < signal_count_; ++i) {
-      //   Eigen::Index neighbor_info_start_idx =
-      //   neighborhood_info_boundaries_(i); Eigen::Index neighbor_info_end_idx
-      //   =
-      //       neighborhood_info_boundaries_(i + 1);
-
-      //   for (Eigen::Index j = neighbor_info_start_idx;
-      //        j < neighbor_info_end_idx; ++j) {
-      //     Eigen::Index neighbor_idx = neighborhood_info_(0, j);
-      //     Eigen::Index coef_idx = neighborhood_info_(1, j);
-
-      //     filtered_signals.col(i) +=
-      //         signals_.col(neighbor_idx) * neighbor_pair_weights(coef_idx);
-      //   }
-
-      //   if (param.normalize_iterates) {
-      //     filtered_signals.col(i).normalize();
-      //   } else {
-      //     filtered_signals.col(i) /= filtered_signals(signal_dim_, i);
-      //   }
-      // }
 
       signals_ = filtered_signals;
 
