@@ -573,6 +573,17 @@ protected:
     double *dev_area_weights;
     convert_to_gpu_memory(area_weights_, &dev_area_weights);
 
+    // convert neighborhood pairs and neighbor distances to GPU memory
+    double *dev_neighbor_pair_weights;
+    convert_to_gpu_memory(neighbor_pair_weights, &dev_neighbor_pair_weights);
+
+    double *dev_weighted_init_signals;
+    convert_to_gpu_memory(weighted_init_signals, &dev_weighted_init_signals);
+
+    // double *dev_filtered_signals;
+    // cudaMalloc((void**)&dev_filtered_signals, weighted_init_signals.size() *
+    // sizeof(double));
+
     int block_size = 256;
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
     int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
@@ -591,10 +602,6 @@ protected:
 
       double *dev_filtered_signals;
       convert_to_gpu_memory(weighted_init_signals, &dev_filtered_signals);
-
-      // convert neighborhood pairs and neighbor distances to GPU memory
-      double *dev_neighbor_pair_weights;
-      convert_to_gpu_memory(neighbor_pair_weights, &dev_neighbor_pair_weights);
 
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
@@ -624,7 +631,6 @@ protected:
       cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
                  cudaMemcpyDeviceToHost);
 
-      convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
       cudaFree(dev_prev_signals);
 
       if (print_diagnostic_info_) {
@@ -654,6 +660,11 @@ protected:
     convert_from_gpu_memory(dev_signals, signals_);
     cudaFree(dev_var_disp_sqrnorm);
     cudaFree(dev_area_weights);
+
+    convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
+
+    cudaFree(dev_weighted_init_signals);
+    cudaFree(dev_filtered_signals);
   }
 
   // Linear solver for symmetric positive definite matrix,
