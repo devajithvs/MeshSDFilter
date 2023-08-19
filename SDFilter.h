@@ -271,112 +271,27 @@ void print_cuda_errors() {
   }
 }
 
-void convert_to_gpu_memory_special(
-    Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> &matrix,
-    Eigen::Index **dev_matrix) {
+template <typename EigenType, typename T>
+void convert_to_gpu_memory(const EigenType &matrix, T **dev_matrix) {
   // Calculate total size of the matrix
-  int totalSize = matrix.rows() * matrix.cols();
+  int totalSize = matrix.size();
 
   // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(Eigen::Index));
+  cudaMalloc((void **)dev_matrix, totalSize * sizeof(T));
 
   // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(Eigen::Index),
+  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(T),
              cudaMemcpyHostToDevice);
 }
 
-void convert_to_gpu_memory_special(
-    Eigen::Matrix<Eigen::Index, 2, Eigen::Dynamic> &matrix,
-    Eigen::Index **dev_matrix) {
-  // Calculate total size of the matrix
-  int totalSize = matrix.rows() * matrix.cols();
-
-  // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(Eigen::Index));
-
-  // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(Eigen::Index),
-             cudaMemcpyHostToDevice);
-}
-
-void convert_to_gpu_memory(const Eigen::MatrixXd &matrix, double **dev_matrix) {
-  // Calculate total size of the matrix
-  int totalSize = matrix.rows() * matrix.cols();
-
-  // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(double));
-
-  // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(double),
-             cudaMemcpyHostToDevice);
-}
-
-void convert_to_gpu_memory(const Eigen::VectorXd &vector, double **dev_vector) {
-  // Calculate total size of the vector
-  int totalSize = vector.size();
-
-  // Allocate memory on the GPU
-  cudaMalloc((void **)dev_vector, totalSize * sizeof(double));
-
-  // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_vector, vector.data(), totalSize * sizeof(double),
-             cudaMemcpyHostToDevice);
-}
-
-void convert_to_gpu_memory(const Eigen::Matrix2Xi &matrix, int **dev_matrix) {
-  // Calculate total size of the matrix
-  int totalSize = matrix.rows() * matrix.cols();
-
-  // Allocate memory on the GPU
-  cudaMalloc((void **)dev_matrix, totalSize * sizeof(int));
-
-  // Copy data from the CPU to the GPU
-  cudaMemcpy(*dev_matrix, matrix.data(), totalSize * sizeof(int),
-             cudaMemcpyHostToDevice);
-}
-
-void convert_from_gpu_memory(double *dev_matrix, Eigen::MatrixXd &matrix) {
-  int rows = matrix.rows();
-  int cols = matrix.cols();
-  int totalSize = rows * cols;
-
-  // Allocate memory on the CPU to store data from the GPU
-  double *host_matrix = new double[totalSize];
-
+template <typename EigenType, typename T>
+void convert_from_gpu_memory(T *dev_matrix, EigenType &matrix) {
   // Copy data from the GPU to the CPU
-  cudaMemcpy(host_matrix, dev_matrix, totalSize * sizeof(double),
+  cudaMemcpy(matrix.data(), dev_matrix, matrix.size() * sizeof(T),
              cudaMemcpyDeviceToHost);
 
-  // Assign the data from the host_matrix to the Eigen matrix
-  for (int i = 0; i < totalSize; ++i) {
-    matrix.data()[i] = host_matrix[i];
-  }
-
-  // Free the CPU memory
-  delete[] host_matrix;
   // Free the GPU memory
   cudaFree(dev_matrix);
-}
-
-void convert_from_gpu_memory(double *dev_vector, Eigen::VectorXd &vector) {
-  int size = vector.size();
-
-  // Allocate memory on the CPU to store data from the GPU
-  double *host_vector = new double[size];
-
-  // Copy data from the GPU to the CPU
-  cudaMemcpy(host_vector, dev_vector, size * sizeof(double),
-             cudaMemcpyDeviceToHost);
-
-  // Assign the data from the host_vector to the Eigen vector
-  for (int i = 0; i < size; ++i) {
-    vector(i) = host_vector[i];
-  }
-
-  // Free the CPU memory
-  delete[] host_vector;
-  // Free the GPU memory
-  cudaFree(dev_vector);
 }
 
 __global__ void kernel_calculate_spatial_guidance_weights(
@@ -596,7 +511,6 @@ protected:
       double *dev_neighbor_pair_weights;
       convert_to_gpu_memory(neighbor_pair_weights, &dev_neighbor_pair_weights);
 
-      
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
@@ -605,11 +519,10 @@ protected:
       print_cuda_errors();
 
       Eigen::Index *dev_neighborhood_info_boundaries;
-      convert_to_gpu_memory_special(neighborhood_info_boundaries_,
-                                    &dev_neighborhood_info_boundaries);
+      convert_to_gpu_memory(neighborhood_info_boundaries_,
+                            &dev_neighborhood_info_boundaries);
       Eigen::Index *dev_neighborhood_info;
-      convert_to_gpu_memory_special(neighborhood_info_,
-      &dev_neighborhood_info);
+      convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
 
       double *dev_filtered_signals;
       convert_to_gpu_memory(filtered_signals, &dev_filtered_signals);
