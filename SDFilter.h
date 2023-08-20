@@ -131,17 +131,64 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 
     // Calculate squaredNorm of signal difference
     double signal_diff_norm_squared = 0.0;
+#pragma unroll
     for (int j = 0; j < signal_dim; ++j) {
-      double diff = dev_signals[j + signal_dim * idx1] -
-                    dev_signals[j + signal_dim * idx2];
+      double diff1 = dev_signals[j + signal_dim * idx1];
+      double diff2 = dev_signals[j + signal_dim * idx2];
+      double diff = diff1 - diff2;
       signal_diff_norm_squared += diff * diff;
     }
 
+    double exp_term = exp(h * signal_diff_norm_squared);
+
     dev_neighbor_pair_weights[i] =
-        dev_precomputed_area_spatial_guidance_weights[i] *
-        exp(h * signal_diff_norm_squared);
+        dev_precomputed_area_spatial_guidance_weights[i] * exp_term;
   }
 }
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
+//     double *dev_signals, double *dev_filtered_signals) {
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i < signal_count) {
+//     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+//     for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+//       int neighbor_idx = dev_neighborhood_info[2 * j];
+//       int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+//       for (int k = 0; k < signal_dim; ++k) {
+//         dev_filtered_signals[k + signal_dim * i] +=
+//             dev_signals[k + signal_dim * neighbor_idx] *
+//             dev_neighbor_pair_weights[coef_idx];
+//       }
+//     }
+
+//     double sum = 0.0;
+//     for (int k = 0; k < signal_dim; ++k) {
+//       sum += dev_filtered_signals[i * signal_dim + k] *
+//              dev_filtered_signals[i * signal_dim + k];
+//     }
+//     sum = sqrt(sum);
+//     for (int k = 0; k < signal_dim; ++k) {
+//       dev_filtered_signals[i * signal_dim + k] /= sum;
+//     }
+//     // if (normalize_iterates) {
+//     // } else {
+//     //   filtered_signals[i * signal_dim + signal_dim] =
+//     //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
+//     //           ? filtered_signals[i * signal_dim + signal_dim]
+//     //           : 1.0f;
+//     //   for (int k = 0; k < signal_dim; ++k) {
+//     //     filtered_signals[i * signal_dim + k] /=
+//     //         filtered_signals[i * signal_dim + signal_dim];
+//     //   }
+//     // }
+//   }
+// }
 
 __global__ void kernel_calculate_filtered_signals(
     int signal_count, Eigen::Index signal_dim,
@@ -153,37 +200,30 @@ __global__ void kernel_calculate_filtered_signals(
     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
 
+    double sum = 0.0;
     for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
       int neighbor_idx = dev_neighborhood_info[2 * j];
       int coef_idx = dev_neighborhood_info[2 * j + 1];
 
+      double weight = dev_neighbor_pair_weights[coef_idx];
+#pragma unroll
       for (int k = 0; k < signal_dim; ++k) {
-        dev_filtered_signals[k + signal_dim * i] +=
-            dev_signals[k + signal_dim * neighbor_idx] *
-            dev_neighbor_pair_weights[coef_idx];
+        double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
+        double weighted_value = neighbor_value * weight;
+        dev_filtered_signals[k + signal_dim * i] += weighted_value;
       }
     }
 
-    double sum = 0.0;
+#pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
-      sum += dev_filtered_signals[i * signal_dim + k] *
-             dev_filtered_signals[i * signal_dim + k];
+      double curr = dev_filtered_signals[i * signal_dim + k];
+      sum += curr * curr;
     }
-    sum = sqrt(sum);
+    double inv_sum_sqrt = 1.0 / sqrt(sum);
+#pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
-      dev_filtered_signals[i * signal_dim + k] /= sum;
+      dev_filtered_signals[i * signal_dim + k] *= inv_sum_sqrt;
     }
-    // if (normalize_iterates) {
-    // } else {
-    //   filtered_signals[i * signal_dim + signal_dim] =
-    //       filtered_signals[i * signal_dim + signal_dim] != 0.0f
-    //           ? filtered_signals[i * signal_dim + signal_dim]
-    //           : 1.0f;
-    //   for (int k = 0; k < signal_dim; ++k) {
-    //     filtered_signals[i * signal_dim + k] /=
-    //         filtered_signals[i * signal_dim + signal_dim];
-    //   }
-    // }
   }
 }
 
