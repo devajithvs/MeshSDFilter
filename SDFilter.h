@@ -99,6 +99,51 @@ void convert_from_gpu_memory(T *dev_matrix, EigenType &matrix) {
   cudaFree(dev_matrix);
 }
 
+__global__ void accumulate(int num_elements, const double *array,
+                           double *result) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = gridDim.x * blockDim.x;
+
+  double sum = 0.0;
+  for (int i = tid; i < num_elements; i += stride) {
+    sum += array[i];
+  }
+
+  // Perform reduction within the block using shared memory
+  extern __shared__ double shared_sum[];
+  shared_sum[threadIdx.x] = sum;
+  __syncthreads();
+
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    if (threadIdx.x < s) {
+      shared_sum[threadIdx.x] += shared_sum[threadIdx.x + s];
+    }
+    __syncthreads();
+  }
+
+  // Store the block sum in global memory
+  if (threadIdx.x == 0) {
+    atomicAdd(result, shared_sum[0]);
+  }
+}
+
+__global__ void scaleAndWeightInitSignals(int signal_count, int signal_dim,
+                                          double *dev_weighted_init_signals,
+                                          double *dev_init_signals,
+                                          double *dev_area_weights,
+                                          double weight_scaling_factor) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (idx < signal_dim * signal_count) {
+    int i = idx % signal_dim;
+    int j = idx / signal_dim;
+
+    double weighted_value =
+        dev_init_signals[idx] * dev_area_weights[j] * weight_scaling_factor;
+    atomicAdd(&dev_weighted_init_signals[idx], weighted_value);
+  }
+}
+
 __global__ void kernel_calculate_spatial_guidance_weights(
     int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
     double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
@@ -565,28 +610,51 @@ protected:
   }
 
   void fixedpoint_solver(const Parameters &param) {
-    // Store signals in the previous iteration
+    int block_size = 512;
     Eigen::MatrixXd init_signals = signals_;
-    Eigen::MatrixXd prev_signals;
+
+    double *dev_signals;
+    convert_to_gpu_memory(signals_, &dev_signals);
+
+    double *dev_area_weights;
+    convert_to_gpu_memory(area_weights_, &dev_area_weights);
+
+    double *dev_weighted_init_signals;
+    cudaMalloc((void **)&dev_weighted_init_signals,
+               (signal_dim_ * signal_count_) * sizeof(double));
 
     // Weighted initial signals, as used in the fixed-point solver
-    Eigen::MatrixXd weighted_init_signals =
-        init_signals *
-        (area_weights_ * (2 * param.nu * param.nu / param.lambda)).asDiagonal();
+    double weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
+    scaleAndWeightInitSignals<<<(signal_dim_ * signal_count_ + block_size - 1) /
+                                    block_size,
+                                block_size>>>(
+        signal_count_, signal_dim_, dev_weighted_init_signals, dev_signals,
+        dev_area_weights, weight_scaling_factor);
 
-    Eigen::MatrixXd filtered_signals;
     double h = -0.5 / (param.nu * param.nu);
 
     Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
 
-    // The weights for neighboring pairs that are used for convex combination of
-    // neighboring signals in the fixed-point solver
-    Eigen::VectorXd neighbor_pair_weights(n_neighbor_pairs);
-
     // Compute the termination threshold for area weighted squread norm of
     // signal change between two iterations
+    double *dev_area_weights_sum;
+    cudaMalloc(&dev_area_weights_sum, sizeof(double));
+    cudaMemset(dev_area_weights_sum, 0, sizeof(double));
+
+    int num_elements = area_weights_.size();
+    int grid_size = (num_elements + block_size - 1) / block_size;
+
+    accumulate<<<grid_size, block_size, block_size * sizeof(double)>>>(
+        num_elements, dev_area_weights, dev_area_weights_sum);
+
+    double area_weights_sum;
+    cudaMemcpy(&area_weights_sum, dev_area_weights_sum, sizeof(double),
+               cudaMemcpyDeviceToHost);
+
+    cudaFree(dev_area_weights_sum);
+
     double disp_sqr_norm_threshold =
-        area_weights_.sum() * param.avg_disp_eps * param.avg_disp_eps;
+        area_weights_sum * param.avg_disp_eps * param.avg_disp_eps;
 
     int output_frequency = 10;
 
@@ -604,27 +672,19 @@ protected:
     Eigen::Index *dev_neighborhood_info;
     convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
 
-    double *dev_signals;
-    convert_to_gpu_memory(signals_, &dev_signals);
-
     double *dev_var_disp_sqrnorm;
     cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(double));
 
-    double *dev_area_weights;
-    convert_to_gpu_memory(area_weights_, &dev_area_weights);
-
-    // convert neighborhood pairs and neighbor distances to GPU memory
+    // The weights for neighboring pairs that are used for convex combination of
+    // neighboring signals in the fixed-point solver
     double *dev_neighbor_pair_weights;
-    convert_to_gpu_memory(neighbor_pair_weights, &dev_neighbor_pair_weights);
-
-    double *dev_weighted_init_signals;
-    convert_to_gpu_memory(weighted_init_signals, &dev_weighted_init_signals);
+    cudaMalloc((void **)&dev_neighbor_pair_weights,
+               n_neighbor_pairs * sizeof(double));
 
     double *dev_filtered_signals;
     cudaMalloc((void **)&dev_filtered_signals,
-               weighted_init_signals.size() * sizeof(double));
+               signals_.size() * sizeof(double));
 
-    int block_size = 256;
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
     int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
 
@@ -640,8 +700,7 @@ protected:
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
       cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
       cudaMemcpy(dev_filtered_signals, dev_weighted_init_signals,
-                 weighted_init_signals.size() * sizeof(double),
-                 cudaMemcpyDeviceToDevice);
+                 signals_.size() * sizeof(double), cudaMemcpyDeviceToDevice);
 
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
@@ -694,7 +753,7 @@ protected:
     cudaFree(dev_var_disp_sqrnorm);
     cudaFree(dev_area_weights);
 
-    convert_from_gpu_memory(dev_neighbor_pair_weights, neighbor_pair_weights);
+    cudaFree(dev_neighbor_pair_weights);
 
     cudaFree(dev_weighted_init_signals);
     cudaFree(dev_filtered_signals);
