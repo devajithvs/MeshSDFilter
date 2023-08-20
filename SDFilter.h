@@ -68,6 +68,14 @@ __device__ double atomicAdd(double *a, double b) { return b; }
 
 namespace SDFilter {
 
+void print_cuda_errors() {
+  cudaError_t cudaError = cudaGetLastError();
+  if (cudaError != cudaSuccess) {
+    std::cerr << "CUDA kernel launch error: " << cudaGetErrorString(cudaError)
+              << std::endl;
+  }
+}
+
 template <typename EigenType, typename T>
 void convert_to_gpu_memory(const EigenType &matrix, T **dev_matrix) {
   // Calculate total size of the matrix
@@ -482,14 +490,6 @@ protected:
     std::cout << "Nu:" << nu << std::endl;
   }
 };
-
-void print_cuda_errors() {
-  cudaError_t cudaError = cudaGetLastError();
-  if (cudaError != cudaSuccess) {
-    std::cerr << "CUDA kernel launch error: " << cudaGetErrorString(cudaError)
-              << std::endl;
-  }
-}
 
 class Timer {
 public:
