@@ -613,7 +613,11 @@ protected:
     int block_size = 512;
     Eigen::MatrixXd init_signals = signals_;
 
-    double *dev_signals = dev_signals_;
+    double *dev_signals;
+    convert_to_gpu_memory(signals_, &dev_signals);
+
+    double *dev_area_weights;
+    convert_to_gpu_memory(area_weights_, &dev_area_weights);
 
     double *dev_weighted_init_signals;
     cudaMalloc((void **)&dev_weighted_init_signals,
@@ -625,7 +629,7 @@ protected:
                                     block_size,
                                 block_size>>>(
         signal_count_, signal_dim_, dev_weighted_init_signals, dev_signals,
-        dev_area_weights_, weight_scaling_factor);
+        dev_area_weights, weight_scaling_factor);
 
     double h = -0.5 / (param.nu * param.nu);
 
@@ -641,7 +645,7 @@ protected:
     int grid_size = (num_elements + block_size - 1) / block_size;
 
     accumulate<<<grid_size, block_size, block_size * sizeof(double)>>>(
-        num_elements, dev_area_weights_, dev_area_weights_sum);
+        num_elements, dev_area_weights, dev_area_weights_sum);
 
     double area_weights_sum;
     cudaMemcpy(&area_weights_sum, dev_area_weights_sum, sizeof(double),
@@ -712,7 +716,7 @@ protected:
       kernel_calculate_var_disp_sqrnorm_opt<<<grid_size_sqrnorm,
                                               threads_per_block, shared_size>>>(
           signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
-          dev_area_weights_, dev_var_disp_sqrnorm);
+          dev_area_weights, dev_var_disp_sqrnorm);
 
       double var_disp_sqrnorm;
       cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
@@ -747,6 +751,7 @@ protected:
 
     convert_from_gpu_memory(dev_signals, signals_);
     cudaFree(dev_var_disp_sqrnorm);
+    cudaFree(dev_area_weights);
 
     cudaFree(dev_neighbor_pair_weights);
 
@@ -838,11 +843,9 @@ protected:
   int signal_count_; // Number of signals
 
   Eigen::MatrixXd
-      signals_; // Signals to be filtered. Represented in homogeneous form when
-                // there is no normalization constraint
-  double *dev_signals_;
+      signals_; // Signals to be filtered. Represented in homogeneous form
+                // when there is no normalization constraint
   Eigen::VectorXd area_weights_; // Area weights for each element
-  double *dev_area_weights_;
 
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
                                        // pair of neighboring elements
@@ -878,9 +881,11 @@ protected:
 
     // convert Eigen data to raw pointers and move them to GPU memory
     double *dev_guidance;
+    double *dev_init_signals;
+    double *dev_area_weights;
     convert_to_gpu_memory(guidance, &dev_guidance);
-    convert_to_gpu_memory(init_signals, &dev_signals_);
-    convert_to_gpu_memory(area_weights_, &dev_area_weights_);
+    convert_to_gpu_memory(init_signals, &dev_init_signals);
+    convert_to_gpu_memory(area_weights_, &dev_area_weights);
 
     signal_dim_ = init_signals.rows();
     signal_count_ = init_signals.cols();
@@ -941,7 +946,7 @@ protected:
     kernel_calculate_spatial_guidance_weights<<<blocksPerGrid,
                                                 threadsPerBlock>>>(
         n_neighbor_pairs, guidance.rows(), dev_neighboring_pairs,
-        dev_neighbor_dists, dev_area_weights_, h_spatial, h_guidance,
+        dev_neighbor_dists, dev_area_weights, h_spatial, h_guidance,
         dev_guidance, dev_area_spatial_weights,
         dev_precomputed_area_spatial_guidance_weights);
 
@@ -954,6 +959,7 @@ protected:
 
     cudaFree(dev_neighboring_pairs);
     cudaFree(dev_neighbor_dists);
+    cudaFree(dev_area_weights);
     cudaFree(dev_guidance);
 
     convert_from_gpu_memory(dev_area_spatial_weights, area_spatial_weights);
