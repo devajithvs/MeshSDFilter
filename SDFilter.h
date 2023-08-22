@@ -144,35 +144,6 @@ __global__ void scaleAndWeightInitSignals(int signal_count, int signal_dim,
   }
 }
 
-__global__ void kernel_calculate_spatial_guidance_weights(
-    int n_neighbor_pairs, int guidance_dim, int *dev_neighboring_pairs,
-    double *dev_neighbor_dists, double *dev_area_weights, double h_spatial,
-    double h_guidance, double *dev_guidance, double *dev_area_spatial_weights,
-    double *dev_precomputed_area_spatial_guidance_weights) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n_neighbor_pairs) {
-    int idx1 = dev_neighboring_pairs[2 * i],
-        idx2 = dev_neighboring_pairs[2 * i + 1];
-    double d = dev_neighbor_dists[i];
-
-    dev_area_spatial_weights[i] =
-        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
-        exp(h_spatial * d * d);
-
-    // Calculate squaredNorm of guidance difference
-    double guidance_diff_norm_squared = 0.0;
-    for (int j = 0; j < guidance_dim; ++j) {
-      double diff = dev_guidance[j + guidance_dim * idx1] -
-                    dev_guidance[j + guidance_dim * idx2];
-      guidance_diff_norm_squared += diff * diff;
-    }
-
-    dev_precomputed_area_spatial_guidance_weights[i] =
-        (dev_area_weights[idx1] + dev_area_weights[idx2]) *
-        exp(h_guidance * guidance_diff_norm_squared + h_spatial * d * d);
-  }
-}
-
 __global__ void kernel_calculate_neighbor_pair_weights(
     int n_neighbor_pairs, int signal_dim, double h, int *dev_neighboring_pairs,
     double *dev_precomputed_area_spatial_guidance_weights, double *dev_signals,
@@ -879,14 +850,6 @@ protected:
     Eigen::MatrixXd guidance, init_signals;
     get_initial_data(guidance, init_signals, area_weights_);
 
-    // convert Eigen data to raw pointers and move them to GPU memory
-    double *dev_guidance;
-    double *dev_init_signals;
-    double *dev_area_weights;
-    convert_to_gpu_memory(guidance, &dev_guidance);
-    convert_to_gpu_memory(init_signals, &dev_init_signals);
-    convert_to_gpu_memory(area_weights_, &dev_area_weights);
-
     signal_dim_ = init_signals.rows();
     signal_count_ = init_signals.cols();
     if (signal_count_ <= 0) {
@@ -923,48 +886,24 @@ protected:
         n_neighbor_pairs); // Area-integrated spatial weights, used for
                            // rescaling lambda
 
-    // convert neighborhood pairs and neighbor distances to GPU memory
-    int *dev_neighboring_pairs;
-    double *dev_neighbor_dists;
-    convert_to_gpu_memory(neighboring_pairs_, &dev_neighboring_pairs);
-    convert_to_gpu_memory(neighbor_dists, &dev_neighbor_dists);
+    OMP_PARALLEL {
+      OMP_FOR
+      for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
+        // Read the indices of a neighboring pair, and their distance
+        int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
+        double d = neighbor_dists(i);
 
-    double *dev_area_spatial_weights;
-    double *dev_precomputed_area_spatial_guidance_weights;
-    cudaMalloc((void **)&dev_area_spatial_weights,
-               n_neighbor_pairs * sizeof(double));
-    cudaMalloc((void **)&dev_precomputed_area_spatial_guidance_weights,
-               n_neighbor_pairs * sizeof(double));
-
-    // CUDA parameters
-    int threadsPerBlock = 256;
-    int blocksPerGrid =
-        (n_neighbor_pairs + threadsPerBlock - 1) / threadsPerBlock;
-
-    // Call kernel function to calculate precomputed area spatial guidance
-    // weights
-    kernel_calculate_spatial_guidance_weights<<<blocksPerGrid,
-                                                threadsPerBlock>>>(
-        n_neighbor_pairs, guidance.rows(), dev_neighboring_pairs,
-        dev_neighbor_dists, dev_area_weights, h_spatial, h_guidance,
-        dev_guidance, dev_area_spatial_weights,
-        dev_precomputed_area_spatial_guidance_weights);
-
-    // Check for errors
-    cudaError_t cudaError = cudaGetLastError();
-    if (cudaError != cudaSuccess) {
-      std::cerr << "CUDA kernel launch error: " << cudaGetErrorString(cudaError)
-                << std::endl;
+        // Compute the weights associated with the pair
+        area_spatial_weights(i) = (area_weights_(idx1) + area_weights_(idx2)) *
+                                  std::exp(h_spatial * d * d);
+        precomputed_area_spatial_guidance_weights_(i) =
+            (area_weights_(idx1) + area_weights_(idx2)) *
+            std::exp(
+                h_guidance *
+                    (guidance.col(idx1) - guidance.col(idx2)).squaredNorm() +
+                h_spatial * d * d);
+      }
     }
-
-    cudaFree(dev_neighboring_pairs);
-    cudaFree(dev_neighbor_dists);
-    cudaFree(dev_area_weights);
-    cudaFree(dev_guidance);
-
-    convert_from_gpu_memory(dev_area_spatial_weights, area_spatial_weights);
-    convert_from_gpu_memory(dev_precomputed_area_spatial_guidance_weights,
-                            precomputed_area_spatial_guidance_weights_);
 
     assert(neighbor_dists.size() > 0);
     param.lambda *=
