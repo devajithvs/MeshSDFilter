@@ -214,6 +214,65 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 //   }
 // }
 
+// __global__ void computeAccumulatorKernel(double *dev_filtered_signal,
+//                                          Eigen::Index *dev_neighborhood_info,
+//                                          double *dev_neighbor_pair_weights,
+//                                          double *dev_signals,
+//                                          Eigen::Index
+//                                          neighbor_info_start_idx,
+//                                          Eigen::Index neighbor_info_end_idx,
+//                                          Eigen::Index signal_dim, int i) {
+//   int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+//   if (j < neighbor_info_end_idx - neighbor_info_start_idx) {
+//     int neighbor_idx = dev_neighborhood_info[2 *
+//     (j+neighbor_info_start_idx)]; int coef_idx = dev_neighborhood_info[2 *
+//     (j+neighbor_info_start_idx) + 1]; double weight =
+//     dev_neighbor_pair_weights[coef_idx];
+
+//     for (int k = 0; k < signal_dim; ++k) {
+//       double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
+//       double weighted_value = neighbor_value * weight;
+
+//       atomicAdd(&dev_filtered_signal[k + signal_dim * i], weighted_value);
+//     }
+//   }
+// }
+
+__global__ void computeAccumulatorKernel(double *dev_filtered_signal,
+                                         Eigen::Index *dev_neighborhood_info,
+                                         double *dev_neighbor_pair_weights,
+                                         double *dev_signals,
+                                         Eigen::Index neighbor_info_start_idx,
+                                         Eigen::Index neighbor_info_end_idx,
+                                         Eigen::Index signal_dim, int i) {
+  int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (j < neighbor_info_end_idx - neighbor_info_start_idx) {
+    int neighbor_idx = dev_neighborhood_info[2 * (j + neighbor_info_start_idx)];
+    int coef_idx = dev_neighborhood_info[2 * (j + neighbor_info_start_idx) + 1];
+    double weight = dev_neighbor_pair_weights[coef_idx];
+
+    int tid = threadIdx.x;
+    int signal_offset = tid;
+
+    __shared__ double shared_weights[3];
+    __shared__ double shared_values[3];
+
+    for (int k = tid; k < signal_dim; k += blockDim.x) {
+      shared_weights[k] = weight;
+      shared_values[k] = dev_signals[k + signal_dim * neighbor_idx];
+    }
+
+    __syncthreads();
+
+    for (int k = tid; k < signal_dim; k += blockDim.x) {
+      double weighted_value = shared_values[k] * shared_weights[k];
+      atomicAdd(&dev_filtered_signal[k + signal_dim * i], weighted_value);
+    }
+  }
+}
+
 __global__ void kernel_calculate_filtered_signals(
     int signal_count, Eigen::Index signal_dim,
     Eigen::Index *dev_neighborhood_info_boundaries,
@@ -221,23 +280,7 @@ __global__ void kernel_calculate_filtered_signals(
     double *dev_signals, double *dev_filtered_signals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < signal_count) {
-    int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
-    int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
-
     double sum = 0.0;
-    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-      int neighbor_idx = dev_neighborhood_info[2 * j];
-      int coef_idx = dev_neighborhood_info[2 * j + 1];
-
-      double weight = dev_neighbor_pair_weights[coef_idx];
-#pragma unroll
-      for (int k = 0; k < signal_dim; ++k) {
-        double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
-        double weighted_value = neighbor_value * weight;
-        dev_filtered_signals[k + signal_dim * i] += weighted_value;
-      }
-    }
-
 #pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
       double curr = dev_filtered_signals[i * signal_dim + k];
@@ -677,6 +720,25 @@ protected:
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
+
+      double *dev_accumulator;
+      cudaMalloc(&dev_accumulator, signal_dim_ * sizeof(double));
+
+      for (int i = 0; i < signal_count_; ++i) {
+        Eigen::Index neighbor_info_start_idx = neighborhood_info_boundaries_[i];
+        Eigen::Index neighbor_info_end_idx =
+            neighborhood_info_boundaries_[i + 1];
+
+        int blockSize = 1024;
+        long numBlocks =
+            (neighbor_info_end_idx - neighbor_info_start_idx + blockSize - 1) /
+            blockSize;
+
+        computeAccumulatorKernel<<<numBlocks, blockSize>>>(
+            dev_filtered_signals, dev_neighborhood_info,
+            dev_neighbor_pair_weights, dev_signals, neighbor_info_start_idx,
+            neighbor_info_end_idx, signal_dim_, i);
+      }
 
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
