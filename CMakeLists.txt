@@ -100,9 +100,14 @@ add_executable(MeshDenoiser
 target_compile_options(MeshDenoiser PRIVATE -g)
 target_link_libraries(MeshDenoiser MeshSDLibrary)
 
-
 set_target_properties(
     MeshSDFilter
+    PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_ARCHITECTURES 80)
+
+set_target_properties(
+    MeshDenoiser
     PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_ARCHITECTURES 80)
