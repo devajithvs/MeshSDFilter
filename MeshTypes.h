@@ -32,8 +32,6 @@
 #ifndef MESHTYPES_H
 #define MESHTYPES_H
 
-const int THREADS_PER_BLOCK = 256;
-
 #include "EigenTypes.h"
 #include <OpenMesh/Core/IO/MeshIO.hh>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
@@ -143,79 +141,6 @@ template <typename MeshT> inline double bbox_diag_length(const MeshT &mesh) {
   return bbox_dimension(mesh).norm();
 }
 
-// Combined CUDA kernel for finding max-min values and calculating norm
-__global__ void calculate_norm_combined_kernel(const double *vtx_pos,
-                                               double *result_norm,
-                                               int num_rows, int num_cols) {
-  extern __shared__ double shared_data[];
-  int tid = threadIdx.x;
-  int idx = blockIdx.x * blockDim.x + tid;
-
-  if (idx < num_rows) {
-    int row_offset = idx;
-    double max_val = vtx_pos[row_offset];
-    double min_val = vtx_pos[row_offset];
-
-    for (int col = 1; col < num_cols; ++col) {
-      row_offset += num_rows;
-      double value = vtx_pos[row_offset];
-      max_val = max(max_val, value);
-      min_val = min(min_val, value);
-    }
-
-    shared_data[tid] = (max_val - min_val) * (max_val - min_val);
-  } else {
-    shared_data[tid] = 0.0;
-  }
-  __syncthreads();
-
-  // Parallel reduction within the block
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      shared_data[tid] += shared_data[tid + stride];
-    }
-    __syncthreads();
-  }
-
-  if (tid == 0) {
-    atomicAdd(result_norm, sqrt(shared_data[0]));
-  }
-}
-
-// CUDA version of the given code
-template <typename MeshT> double bbox_diag_length_cuda(const MeshT &mesh) {
-  Matrix3X vtx_pos;
-  get_vertex_points(mesh, vtx_pos);
-  int num_rows = vtx_pos.rows();
-  int num_cols = vtx_pos.cols();
-
-  // Copy vertex positions to the device
-  double *d_vtx_pos;
-  cudaMalloc((void **)&d_vtx_pos, sizeof(double) * num_rows * num_cols);
-  cudaMemcpy(d_vtx_pos, vtx_pos.data(), sizeof(double) * num_rows * num_cols,
-             cudaMemcpyHostToDevice);
-
-  double *d_result_norm;
-  cudaMalloc((void **)&d_result_norm, sizeof(double));
-  cudaMemset(d_result_norm, 0, sizeof(double));
-
-  int threadsPerBlock = THREADS_PER_BLOCK;
-  int blocksPerGrid = (num_rows + threadsPerBlock - 1) / threadsPerBlock;
-
-  calculate_norm_combined_kernel<<<blocksPerGrid, threadsPerBlock,
-                                   sizeof(double) * threadsPerBlock>>>(
-      d_vtx_pos, d_result_norm, num_rows, num_cols);
-
-  double result_norm;
-  cudaMemcpy(&result_norm, d_result_norm, sizeof(double),
-             cudaMemcpyDeviceToHost);
-
-  cudaFree(d_vtx_pos);
-  cudaFree(d_result_norm);
-
-  return result_norm;
-}
-
 template <typename MeshT>
 inline Eigen::Vector3d mesh_center(const MeshT &mesh) {
   Matrix3X vtx_pos;
@@ -270,7 +195,7 @@ template <typename MeshT>
 inline void normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center,
                            double &original_scale) {
   original_center = mesh_center(mesh);
-  original_scale = bbox_diag_length_cuda(mesh);
+  original_scale = bbox_diag_length(mesh);
 
   Matrix3X vtx_pos;
   get_vertex_points(mesh, vtx_pos);

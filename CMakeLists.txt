@@ -107,12 +107,6 @@ set_target_properties(
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_ARCHITECTURES 80)
 
-set_target_properties(
-    MeshDenoiser
-    PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_ARCHITECTURES 80)
-
 if(OPENMP_FOUND)
   #target_compile_options(MeshSDLibrary PUBLIC "$<$<CONFIG:RELEASE>:${OpenMP_CXX_FLAGS}>")
   #target_compile_definitions(MeshSDLibrary PUBLIC "$<$<CONFIG:RELEASE>:USE_OPENMP>")
