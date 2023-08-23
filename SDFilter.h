@@ -220,29 +220,6 @@ __global__ void kernel_calculate_filtered_signals(
     double *dev_signals, double *dev_filtered_signals,
     double *dev_weighted_init_signals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-  const int chunk_size =
-      (blockDim.x + 1) * signal_dim - 1; // Shared memory size will limit this
-
-  extern __shared__ double shared_weighted_init_signals[];
-
-  // Initialize shared memory by a single thread
-  if (threadIdx.x == 0) {
-    // block 0 - i=0-512 =  init[i * signal_dim + k]
-    //                          [0, 512*3 + 2]
-    // block 1 - i=512-1024=    [512, 512*3+2]
-    // block b - i=512b-512(b+1)=
-    // [blockDim.x*blockIdx.x, blockDim.x*(blockIdx.x+1)*3+2]
-    int chunk_start = blockIdx.x * blockDim.x;
-    for (int j = 0;
-         j < chunk_size && chunk_start + j < signal_count * signal_dim; ++j) {
-      shared_weighted_init_signals[j] =
-          dev_weighted_init_signals[chunk_start + j];
-    }
-  }
-
-  __syncthreads(); // Synchronize to ensure all threads see the initialized data
-
   if (i < signal_count) {
     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
@@ -260,10 +237,9 @@ __global__ void kernel_calculate_filtered_signals(
       }
     }
 
-    int current_chunk_start = threadIdx.x * signal_dim;
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] +=
-          shared_weighted_init_signals[current_chunk_start + k];
+          dev_weighted_init_signals[i * signal_dim + k];
       double curr = dev_filtered_signals[i * signal_dim + k];
       sum += curr * curr;
     }
@@ -703,9 +679,7 @@ protected:
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
 
-      int shared_mem_size = block_size * signal_dim_ * sizeof(double);
-      kernel_calculate_filtered_signals<<<grid_size_filtered, block_size,
-                                          shared_mem_size>>>(
+      kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
           dev_filtered_signals, dev_weighted_init_signals);
