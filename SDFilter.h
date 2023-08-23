@@ -218,7 +218,8 @@ __global__ void kernel_calculate_filtered_signals(
     int signal_count, Eigen::Index signal_dim,
     Eigen::Index *dev_neighborhood_info_boundaries,
     Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
-    double *dev_signals, double *dev_filtered_signals) {
+    double *dev_signals, double *dev_filtered_signals,
+    double *dev_weighted_init_signals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < signal_count) {
     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
@@ -240,6 +241,8 @@ __global__ void kernel_calculate_filtered_signals(
 
 #pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
+      dev_filtered_signals[i * signal_dim + k] +=
+          dev_weighted_init_signals[i * signal_dim + k];
       double curr = dev_filtered_signals[i * signal_dim + k];
       sum += curr * curr;
     }
@@ -670,8 +673,10 @@ protected:
 
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
       cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
-      cudaMemcpy(dev_filtered_signals, dev_weighted_init_signals,
-                 signals_.size() * sizeof(double), cudaMemcpyDeviceToDevice);
+      cudaMemset(dev_filtered_signals, 0, signals_.size() * sizeof(double));
+
+      // cudaMemcpy(dev_filtered_signals, dev_weighted_init_signals,
+      //            signals_.size() * sizeof(double), cudaMemcpyDeviceToDevice);
 
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
@@ -681,7 +686,7 @@ protected:
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
-          dev_filtered_signals);
+          dev_filtered_signals, dev_weighted_init_signals);
 
       // kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
       kernel_calculate_var_disp_sqrnorm_opt<<<grid_size_sqrnorm,
