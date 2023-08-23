@@ -155,7 +155,6 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 
     // Calculate squaredNorm of signal difference
     double signal_diff_norm_squared = 0.0;
-#pragma unroll
     for (int j = 0; j < signal_dim; ++j) {
       double diff1 = dev_signals[j + signal_dim * idx1];
       double diff2 = dev_signals[j + signal_dim * idx2];
@@ -231,7 +230,6 @@ __global__ void kernel_calculate_filtered_signals(
       int coef_idx = dev_neighborhood_info[2 * j + 1];
 
       double weight = dev_neighbor_pair_weights[coef_idx];
-#pragma unroll
       for (int k = 0; k < signal_dim; ++k) {
         double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
         double weighted_value = neighbor_value * weight;
@@ -239,7 +237,6 @@ __global__ void kernel_calculate_filtered_signals(
       }
     }
 
-#pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] +=
           dev_weighted_init_signals[i * signal_dim + k];
@@ -247,7 +244,6 @@ __global__ void kernel_calculate_filtered_signals(
       sum += curr * curr;
     }
     double inv_sum_sqrt = 1.0 / sqrt(sum);
-#pragma unroll
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] *= inv_sum_sqrt;
     }
