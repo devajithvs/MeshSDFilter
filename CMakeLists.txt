@@ -5,13 +5,14 @@ project(SDFilter LANGUAGES CXX CUDA)
 # Find CUDA package
 find_package(CUDA REQUIRED)
 
-find_package(CUDAToolkit REQUIRED)
+# list(APPEND CMAKE_PREFIX_PATH "/usr/local/cuda-12.2/targets/x86_64-linux")
+# find_package(CUDAToolkit REQUIRED)
 
 # Set the path to the CUDA toolkit libraries
-list(APPEND CMAKE_PREFIX_PATH "/usr/local/cuda-12.2")
+# list(APPEND CMAKE_PREFIX_PATH "/usr/local/cuda-12.2")
 
-find_library(CUSOLVER_LIBRARIES cusolver HINTS ${CUDAToolkit_LIBRARY_DIR})
-find_library(CUSPARSE_LIBRARIES cusparse HINTS ${CUDAToolkit_LIBRARY_DIR})
+find_library(CUSOLVER_LIBRARIES cusolver HINTS "/usr/local/cuda-12.2/targets/x86_64-linux/lib")
+find_library(CUSPARSE_LIBRARIES cusparse HINTS "/usr/local/cuda-12.2/targets/x86_64-linux/lib")
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
