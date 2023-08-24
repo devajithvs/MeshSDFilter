@@ -32,6 +32,7 @@
 #ifndef MESHNORMALFILTER_H_
 #define MESHNORMALFILTER_H_
 
+#include "LinearSolverGPU.h"
 #include "MeshTypes.h"
 #include "SDFilter.h"
 #include <algorithm>
@@ -369,7 +370,9 @@ private:
   // > 0 is a closeness weight. This amounts to solving a linear system
   //	(A^T A + w I) X = A^T B + w X0.
   // We precompute matrix A^T, and pre-factorize A^T A + w I
-  LinearSolver linear_solver_; // Linear system solver for mesh update
+  // LinearSolver linear_solver_; // Linear system solver for mesh update
+
+  LinearSolverCPU linear_solver_;
   SparseMatrixXd At_; // Transpose of part of the linear least squares matrix
                       // that corresponds to mean centering of face vertices
   bool system_matrix_factorized_; // Whether the matrix
