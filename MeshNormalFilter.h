@@ -154,11 +154,11 @@ public:
                 << " secs" << std::endl;
     }
 
-    if (print_error_evaluation_) {
+    // if (print_error_evaluation_) {
       std::cout << std::endl;
       show_normalized_mesh_displacement_norm(output_mesh);
       show_normal_error_statistics(output_mesh, target_normals, 2, 10);
-    }
+    // }
 
     return true;
   }
