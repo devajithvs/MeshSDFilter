@@ -5,6 +5,14 @@ project(SDFilter LANGUAGES CXX CUDA)
 # Find CUDA package
 find_package(CUDA REQUIRED)
 
+find_package(CUDAToolkit REQUIRED)
+
+# Set the path to the CUDA toolkit libraries
+list(APPEND CMAKE_PREFIX_PATH "/usr/local/cuda-12.2")
+
+find_library(CUSOLVER_LIBRARIES cusolver HINTS ${CUDAToolkit_LIBRARY_DIR})
+find_library(CUSPARSE_LIBRARIES cusparse HINTS ${CUDAToolkit_LIBRARY_DIR})
+
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -89,8 +97,15 @@ add_executable(MeshSDFilter
   MeshSDFilter.cu
 )
 target_compile_options(MeshSDFilter PRIVATE -g)
-target_link_libraries(MeshSDFilter MeshSDLibrary ${CUDA_LIBRARIES} ${CUDA_CUFFT_LIBRARIES} ${CUDA_CUBLAS_LIBRARIES} ${CUDA_curand_LIBRARY} ${CUDA_cusparse_LIBRARY} ${CUDA_npp_LIBRARY} ${CUDA_nppc_LIBRARY} ${CUDA_nppi_LIBRARY} ${CUDA_npps_LIBRARY} ${CUDA_nvcuvenc_LIBRARY} ${CUDA_nvcuvid_LIBRARY})
-
+target_link_libraries(MeshSDFilter
+    MeshSDLibrary
+    ${CUDA_LIBRARIES}
+    ${CUDA_CUFFT_LIBRARIES}
+    ${CUDA_CUBLAS_LIBRARIES}
+    ${CUDA_curand_LIBRARY}
+    ${CUSOLVER_LIBRARIES}    # Link with CUSOLVER
+    ${CUSOLVER_LIBRARIES}    # Link with CUSPARSE
+)
 
 # Executable for denoising
 add_executable(MeshDenoiser
@@ -103,7 +118,15 @@ add_executable(MeshDenoiser
   MeshDenoiser.cu
 )
 target_compile_options(MeshDenoiser PRIVATE -g)
-target_link_libraries(MeshDenoiser MeshSDLibrary ${CUDA_LIBRARIES} ${CUDA_CUFFT_LIBRARIES} ${CUDA_CUBLAS_LIBRARIES} ${CUDA_curand_LIBRARY} ${CUDA_cusparse_LIBRARY} ${CUDA_npp_LIBRARY} ${CUDA_nppc_LIBRARY} ${CUDA_nppi_LIBRARY} ${CUDA_npps_LIBRARY} ${CUDA_nvcuvenc_LIBRARY} ${CUDA_nvcuvid_LIBRARY})
+target_link_libraries(MeshDenoiser
+    MeshSDLibrary 
+    ${CUDA_LIBRARIES} 
+    ${CUDA_CUFFT_LIBRARIES} 
+    ${CUDA_CUBLAS_LIBRARIES} 
+    ${CUDA_curand_LIBRARY} 
+    ${CUSOLVER_LIBRARIES}    # Link with CUSOLVER
+    ${CUSOLVER_LIBRARIES}    # Link with CUSPARSE
+)
 
 set_target_properties(
     MeshSDFilter
