@@ -372,10 +372,13 @@ private:
   // We precompute matrix A^T, and pre-factorize A^T A + w I
   // LinearSolver linear_solver_; // Linear system solver for mesh update
 
-  LinearSolverCPU linear_solver_;
+  // LinearSolverCPU linear_solver_;
+  LinearSolverGPU linear_solver_;
   SparseMatrixXd At_; // Transpose of part of the linear least squares matrix
                       // that corresponds to mean centering of face vertices
   bool system_matrix_factorized_; // Whether the matrix
+
+  SparseMatrixXd M;
 
   // Set up and pre-factorize the linear system for iterative mesh update
   bool setup_mesh_udpate_system(const Matrix3Xi &face_vtx_idx,
@@ -423,14 +426,9 @@ private:
 
     SparseMatrixXd wI(n_vtx, n_vtx);
     wI.setFromTriplets(I_triplets.begin(), I_triplets.end());
-    SparseMatrixXd M = At_ * A + wI;
+    M = At_ * A + wI;
 
     linear_solver_.reset_pattern();
-    if (!linear_solver_.compute(M)) {
-      std::cerr << "Error: failed to pre-factorize mesh update system"
-                << std::endl;
-      return false;
-    }
 
     system_matrix_factorized_ = true;
     return true;
@@ -467,6 +465,7 @@ private:
     }
 
     std::cout << "Starting iterative mesh update......" << std::endl;
+    std::cerr << "Starting all the mesh update" << std::endl;
 
     Matrix3X vtx_pos;
     get_vertex_points(output_mesh, vtx_pos);
@@ -486,6 +485,24 @@ private:
     int n_vtx = output_mesh.n_vertices();
     Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
 
+    int nnz = M.nonZeros();
+    int *csrRowPtr = M.outerIndexPtr();
+    int *csrColInd = M.innerIndexPtr();
+    double *csrVal = M.valuePtr();
+
+    // if (!linear_solver_.compute(M)) {
+    //   std::cerr << "Error: failed to pre-factorize mesh update system"
+    //             << std::endl;
+    //   return false;
+    // }
+
+    if (!linear_solver_.compute(n_vtx, nnz, csrRowPtr, csrColInd, csrVal)) {
+      std::cerr << "Error: failed to pre-factorize mesh update system"
+                << std::endl;
+      return false;
+    }
+
+    std::cerr << "Before all the iterations" << std::endl;
     for (int iter = 0; iter < param.mesh_update_iter; ++iter) {
       OMP_PARALLEL {
         OMP_FOR
@@ -539,6 +556,7 @@ private:
         }
       }
 
+      std::cerr << "Before solving linear system" << std::endl;
       // Solver linear system
       rhs = At_ * B + wX0;
       if (!linear_solver_.solve(rhs, sol)) {
@@ -651,12 +669,12 @@ private:
     Eigen::MatrixX3d sol(n_vtx, 3);
 
     linear_solver_.reset_pattern();
-    if (!(linear_solver_.compute(M) && linear_solver_.solve(rhs, sol))) {
-      std::cerr
-          << "Error: failed to solve linear system for Poisson mesh update"
-          << std::endl;
-      return false;
-    }
+    // if (!(linear_solver_.compute(M) && linear_solver_.solve(rhs, sol))) {
+    //   std::cerr
+    //       << "Error: failed to solve linear system for Poisson mesh update"
+    //       << std::endl;
+    //   return false;
+    // }
 
     // Align the new mesh with the intial mesh
     vtx_pos = sol.transpose();
