@@ -105,7 +105,7 @@ class MeshNormalFilter : public SDFilter {
 public:
   MeshNormalFilter(const TriMesh &mesh)
       : mesh_(mesh), print_error_evaluation_(false),
-        linear_solver_(Parameters::LDLT), system_matrix_factorized_(false) {}
+        linear_solver_(Parameters::CG), system_matrix_factorized_(false) {}
 
   virtual ~MeshNormalFilter() {}
 
@@ -485,17 +485,6 @@ private:
     int n_vtx = output_mesh.n_vertices();
     Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
 
-    // int nnz = M.nonZeros();
-    // int *csrRowPtr = M.outerIndexPtr();
-    // int *csrColInd = M.innerIndexPtr();
-    // double *csrVal = M.valuePtr();
-
-    // if (!linear_solver_.compute(M)) {
-    //   std::cerr << "Error: failed to pre-factorize mesh update system"
-    //             << std::endl;
-    //   return false;
-    // }
-
     if (!linear_solver_.compute(M)) {
       std::cerr << "Error: failed to pre-factorize mesh update system"
                 << std::endl;
@@ -668,12 +657,12 @@ private:
     Eigen::MatrixX3d sol(n_vtx, 3);
 
     linear_solver_.reset_pattern();
-    // if (!(linear_solver_.compute(M) && linear_solver_.solve(rhs, sol))) {
-    //   std::cerr
-    //       << "Error: failed to solve linear system for Poisson mesh update"
-    //       << std::endl;
-    //   return false;
-    // }
+    if (!(linear_solver_.compute(M) && linear_solver_.solve(rhs, sol))) {
+      std::cerr
+          << "Error: failed to solve linear system for Poisson mesh update"
+          << std::endl;
+      return false;
+    }
 
     // Align the new mesh with the intial mesh
     vtx_pos = sol.transpose();

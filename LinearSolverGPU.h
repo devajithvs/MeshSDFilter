@@ -63,8 +63,6 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   void *buffer = NULL;
   cudaMalloc(&buffer, bufferSize);
 
-  // ... (similar initialization steps as in the main code)
-
   // Start CG algorithm
   cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
                vecx, &beta, vecAx, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
@@ -85,7 +83,7 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
     }
 
     cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
-                 vecp, &beta, vecAx, CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT,
+                 vecp, &beta, vecAx, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
                  buffer);
     blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_Ax, 1, &dot);
     a = r1 / dot;
@@ -97,7 +95,7 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
     r0 = r1;
     blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
     cudaDeviceSynchronize();
-    printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+    // printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
     k++;
   }
 
@@ -221,9 +219,8 @@ public:
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
-
-        return true;
       }
+      return true;
     } else if (solver_type_ == Parameters::CG) {
 
       int n_cols = rhs.cols();
@@ -231,17 +228,16 @@ public:
       for (int i = 0; i < n_cols; ++i) {
         const double *b_data = rhs.col(i).data();
 
-        CUDA_CHECK(cudaMemcpy(d_b, b_data, n * sizeof(double),
-                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpyAsync(d_b, b_data, n * sizeof(double),
+                                   cudaMemcpyHostToDevice));
 
         solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
                                     d_b, d_x);
 
-        CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
-                              cudaMemcpyDeviceToHost));
-
-        return true;
+        CUDA_CHECK(cudaMemcpyAsync(sol.col(i).data(), d_x, n * sizeof(double),
+                                   cudaMemcpyDeviceToHost));
       }
+      return true;
 
     } else {
       return false;
