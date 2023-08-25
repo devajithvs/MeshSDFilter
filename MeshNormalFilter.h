@@ -556,7 +556,6 @@ private:
         }
       }
 
-      std::cerr << "Before solving linear system" << std::endl;
       // Solver linear system
       rhs = At_ * B + wX0;
       if (!linear_solver_.solve(rhs, sol)) {

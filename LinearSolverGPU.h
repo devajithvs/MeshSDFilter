@@ -38,9 +38,9 @@ void solveUsingCusolver(const int n, const int nnz, const int *d_csrRowPtr,
   int reorder = 0;     // No reordering
   int singularity = 0; // 0 if the matrix is non-singular
 
-  cusolverStatus_t status =
-      cusolverSpDcsrlsvchol(handle, n, nnz, descrA, d_csrVal, d_csrRowPtr,
-                            d_csrColInd, d_b, 1e-6, reorder, d_x, &singularity);
+  cusolverStatus_t status = cusolverSpDcsrlsvchol(
+      handle, n, nnz, descrA, d_csrVal, d_csrRowPtr, d_csrColInd, d_b, 1e-12,
+      reorder, d_x, &singularity);
 
   if (status != CUSOLVER_STATUS_SUCCESS) {
     std::cerr << "cusolverSpDcsrlsvchol failed" << std::endl;
@@ -79,7 +79,6 @@ public:
       CUDA_CHECK(cudaMemcpy(d_csrColInd, csrColInd, nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
 
-      std::cerr << "initialization11 working" << std::endl;
       return true;
     } else {
       return false;
@@ -89,7 +88,6 @@ public:
   bool solve(const Eigen::MatrixX3d &rhs, Eigen::MatrixX3d &sol) {
     if (solver_type_ == Parameters::LDLT) {
 
-      std::cerr << "Start here" << std::endl;
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
@@ -101,8 +99,8 @@ public:
         solveUsingCusolver(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
                            d_x);
 
-        cudaMemcpy(sol.col(i).data(), d_x, sol.col(i).size() * sizeof(double),
-                   cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
+                              cudaMemcpyDeviceToHost));
 
         return true;
       }
