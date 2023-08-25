@@ -485,10 +485,10 @@ private:
     int n_vtx = output_mesh.n_vertices();
     Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
 
-    int nnz = M.nonZeros();
-    int *csrRowPtr = M.outerIndexPtr();
-    int *csrColInd = M.innerIndexPtr();
-    double *csrVal = M.valuePtr();
+    // int nnz = M.nonZeros();
+    // int *csrRowPtr = M.outerIndexPtr();
+    // int *csrColInd = M.innerIndexPtr();
+    // double *csrVal = M.valuePtr();
 
     // if (!linear_solver_.compute(M)) {
     //   std::cerr << "Error: failed to pre-factorize mesh update system"
@@ -496,7 +496,7 @@ private:
     //   return false;
     // }
 
-    if (!linear_solver_.compute(n_vtx, nnz, csrRowPtr, csrColInd, csrVal)) {
+    if (!linear_solver_.compute(M)) {
       std::cerr << "Error: failed to pre-factorize mesh update system"
                 << std::endl;
       return false;

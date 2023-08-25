@@ -18,6 +18,9 @@
 // Linear solver for symmetric positive definite matrix,
 namespace SDFilter {
 
+void solveUsingCG(const int n, double *d_A, double *d_p, double *d_r,
+                  double *d_temp, double *d_b, double *d_x) {}
+
 void solveUsingCusolver(const int n, const int nnz, const int *d_csrRowPtr,
                         const int *d_csrColInd, const double *d_csrVal,
                         const double *d_b, double *d_x) {
@@ -59,12 +62,10 @@ public:
       : solver_type_(solver_type) {}
 
   // Initialize the solver with matrix
-  bool compute(int n1, int nnz1, int *csrRowPtr, int *csrColInd,
-               double *csrVal) {
+  bool compute(const SparseMatrixXd &M) {
     if (solver_type_ == Parameters::LDLT) {
-      std::cerr << "initialization0 working" << std::endl;
-      n = n1;
-      nnz = nnz1;
+      n = M.rows();
+      nnz = M.nonZeros();
 
       CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
       CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
@@ -72,14 +73,16 @@ public:
       CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
       CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
 
-      CUDA_CHECK(cudaMemcpy(d_csrVal, csrVal, nnz * sizeof(double),
+      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
                             cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, csrRowPtr, (n + 1) * sizeof(int),
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrColInd, csrColInd, nnz * sizeof(int),
+      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
+                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
 
       return true;
+    } else if (solver_type_ == Parameters::CG) {
+
     } else {
       return false;
     }
@@ -129,6 +132,7 @@ private:
   Parameters::LinearSolverType solver_type_;
   int n, nnz;
   double *d_csrVal, *d_b, *d_x;
+  double *d_A, d_p, *d_r, *d_temp;
   int *d_csrRowPtr, *d_csrColInd;
 };
 
