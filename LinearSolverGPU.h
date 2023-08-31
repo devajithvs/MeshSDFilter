@@ -125,15 +125,19 @@ struct CuSolverState {
   cudaStream_t stream;
   cusparseMatDescr_t descrA;
   csrcholInfo_t info;
+  cusparseHandle_t cusparseH;
 
   CuSolverState()
-      : handle(nullptr), stream(nullptr), descrA(nullptr), info(nullptr) {}
+      : stream(nullptr), cusparseH(nullptr) {}
 };
 
 // Initialize cuSOLVER state
 void initializeCuSolverState(CuSolverState &state) {
   CUDA_CHECK(cudaSetDevice(0)); // Set the CUDA device if necessary
   cusolverSpCreate(&state.handle);
+
+  cusparseCreate(&state.cusparseH);
+  cusparseSetStream(state.cusparseH, state.stream);
 
   cudaStreamCreate(&state.stream);
   cusolverSpSetStream(state.handle, state.stream);
@@ -186,59 +190,36 @@ void solveLDLT(const CuSolverState &state, void *d_workspace, const int n,
   cusolverSpDcsrcholSolve(state.handle, n, d_b, d_x, state.info, nullptr);
 }
 
-void solveUsingCusolver2(const int n, const int nnz, const int *d_csrRowPtr,
+void solveUsingCusolver2(const CuSolverState &state, const int n, const int nnz, const int *d_csrRowPtr,
                          const int *d_csrColInd, const double *d_csrVal,
                          const double *d_b, double *d_x) {
-  cusolverSpHandle_t handle;
-  cusparseHandle_t cusparseH = nullptr; // residual evaluation
-  cudaStream_t stream = nullptr;
-
-  CUDA_CHECK(cudaSetDevice(0)); // Set the CUDA device if necessary
-  cusolverSpCreate(&handle);
-
-  cusparseCreate(&cusparseH);
-  cusparseSetStream(cusparseH, stream);
-
-  cudaStreamCreate(&stream);
-  cusolverSpSetStream(handle, stream);
-
-  // Create a cusparse matrix descriptor
-  cusparseMatDescr_t descrA;
-  cusparseCreateMatDescr(&descrA);
-  cusparseSetMatType(descrA, CUSPARSE_MATRIX_TYPE_GENERAL);
-  cusparseSetMatIndexBase(descrA, CUSPARSE_INDEX_BASE_ZERO);
-
-  // Create opaque info structure for Cholesky
-  csrcholInfo_t info;
-  cusolverSpCreateCsrcholInfo(&info);
-
   // Analyze Cholesky structure
-  cusolverSpXcsrcholAnalysis(handle, n, nnz, descrA, d_csrRowPtr, d_csrColInd,
-                             info);
+  cusolverSpXcsrcholAnalysis(state.handle, n, nnz, state.descrA, d_csrRowPtr, d_csrColInd,
+                             state.info);
 
   // Compute workspace size
   size_t size_internal = 0, size_chol = 0;
-  cusolverSpDcsrcholBufferInfo(handle, n, nnz, descrA, d_csrVal, d_csrRowPtr,
-                               d_csrColInd, info, &size_internal, &size_chol);
+  cusolverSpDcsrcholBufferInfo(state.handle, n, nnz, state.descrA, d_csrVal, d_csrRowPtr,
+                               d_csrColInd, state.info, &size_internal, &size_chol);
 
   // Allocate workspace on GPU
   void *d_workspace = nullptr;
   cudaMalloc(&d_workspace, size_chol);
 
   // Factorize the matrix
-  cusolverSpDcsrcholFactor(handle, n, nnz, descrA, d_csrVal, d_csrRowPtr,
-                           d_csrColInd, info, d_workspace);
+  cusolverSpDcsrcholFactor(state.handle, n, nnz, state.descrA, d_csrVal, d_csrRowPtr,
+                           d_csrColInd, state.info, d_workspace);
 
   // Solve the linear system
-  cusolverSpDcsrcholSolve(handle, n, d_b, d_x, info, d_workspace);
+  cusolverSpDcsrcholSolve(state.handle, n, d_b, d_x, state.info, d_workspace);
 
   // Clean up
-  cusparseDestroyMatDescr(descrA);
-  cusolverSpDestroyCsrcholInfo(info);
+  // cusparseDestroyMatDescr(state.descrA);
+  // cusolverSpDestroyCsrcholInfo(state.info);
   cudaFree(d_workspace);
 
-  cusolverSpDestroy(handle);
-  CUDA_CHECK(cudaStreamDestroy(stream));
+  // cusolverSpDestroy(state.handle);
+  // CUDA_CHECK(cudaStreamDestroy(state.stream));
 }
 
 void solveUsingCusolver(const int n, const int nnz, const int *d_csrRowPtr,
@@ -346,8 +327,10 @@ public:
 
         // solveLDLT(solverState, d_workspace, n, d_b, d_x);
 
-        solveUsingCusolver2(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
+        initializeCuSolverState(solverState);
+        solveUsingCusolver2(solverState, n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
                             d_x);
+        cleanupCuSolverState(solverState);
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
