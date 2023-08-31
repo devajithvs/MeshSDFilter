@@ -184,47 +184,10 @@ void factorize(const CuSolverState &state, size_t &size_chol, const int n,
 }
 
 // Solve the linear system using cuSOLVER
-void solveLDLT(const CuSolverState &state, size_t &size_chol, const int n,
+void solveLDLT(const CuSolverState &state, void *d_workspace, const int n,
                const double *d_b, double *d_x) {
   // Solve the linear system
-  void *d_workspace = nullptr;
-  cudaMalloc(&d_workspace, size_chol);
   cusolverSpDcsrcholSolve(state.handle, n, d_b, d_x, state.info, d_workspace);
-  cudaFree(d_workspace);
-}
-
-void solveUsingCusolver2(const CuSolverState &state, size_t &size_chol,
-                         const int n, const int nnz, const int *d_csrRowPtr,
-                         const int *d_csrColInd, const double *d_csrVal,
-                         const double *d_b, double *d_x) {
-  // Analyze Cholesky structure
-  cusolverSpXcsrcholAnalysis(state.handle, n, nnz, state.descrA, d_csrRowPtr,
-                             d_csrColInd, state.info);
-
-  // Compute workspace size
-  size_t size_internal = 0;
-  cusolverSpDcsrcholBufferInfo(state.handle, n, nnz, state.descrA, d_csrVal,
-                               d_csrRowPtr, d_csrColInd, state.info,
-                               &size_internal, &size_chol);
-
-  // Allocate workspace on GPU
-  void *d_workspace = nullptr;
-  cudaMalloc(&d_workspace, size_chol);
-
-  // Factorize the matrix
-  cusolverSpDcsrcholFactor(state.handle, n, nnz, state.descrA, d_csrVal,
-                           d_csrRowPtr, d_csrColInd, state.info, d_workspace);
-
-  // Solve the linear system
-  cusolverSpDcsrcholSolve(state.handle, n, d_b, d_x, state.info, d_workspace);
-
-  // Clean up
-  // cusparseDestroyMatDescr(state.descrA);
-  // cusolverSpDestroyCsrcholInfo(state.info);
-  cudaFree(d_workspace);
-
-  // cusolverSpDestroy(state.handle);
-  // CUDA_CHECK(cudaStreamDestroy(state.stream));
 }
 
 void solveUsingCusolver(const int n, const int nnz, const int *d_csrRowPtr,
@@ -290,10 +253,10 @@ public:
 
       // Create and initialize the input data (d_csrRowPtr, d_csrColInd,
       // d_csrVal, d_b) Factorize the matrix
+      size_t size_chol = 0;
       factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
                 d_csrVal);
-
-      // cleanupCuSolverState(solverState);
+      cudaMalloc(&d_workspace, size_chol);
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
@@ -330,15 +293,12 @@ public:
         CUDA_CHECK(cudaMemcpy(d_b, b_data, n * sizeof(double),
                               cudaMemcpyHostToDevice));
 
-        solveLDLT(solverState, size_chol, n, d_b, d_x);
-
-        // solveUsingCusolver2(solverState, size_chol, n, nnz, d_csrRowPtr,
-        // d_csrColInd, d_csrVal, d_b,
-        //                     d_x);
+        solveLDLT(solverState, d_workspace, n, d_b, d_x);
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
       }
+
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
@@ -369,6 +329,8 @@ public:
     // CUDA_CHECK(cudaFree(d_csrColInd));
     // CUDA_CHECK(cudaFree(d_b));
     // CUDA_CHECK(cudaFree(d_x));
+    // cudaFree(d_workspace);
+    // cleanupCuSolverState(solverState);
   }
 
   void set_solver_type(Parameters::LinearSolverType type) {
@@ -380,7 +342,7 @@ public:
 
 private:
   CuSolverState solverState;
-  size_t size_chol = 0;
+  void *d_workspace = nullptr;
 
   Parameters::LinearSolverType solver_type_;
   int n, nnz;
