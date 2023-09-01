@@ -611,8 +611,12 @@ private:
             // Otherwise, project the points onto a line in the target plane
             Eigen::Matrix<double, 3, 2> current_local_frame;
             if (local_frame_initialized[i]) {
-              current_local_frame =
-                  target_plane_local_frames.block(0, 2 * i, 3, 2);
+              for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 2; ++c) {
+                  current_local_frame(r, c) =
+                      target_plane_local_frames(r, 2 * i + c);
+                }
+              }
             } else {
               Eigen::Vector3d normalized_normal = target_normal.normalized();
               Eigen::Vector3d basis1 = Eigen::Vector3d::UnitX();
@@ -626,8 +630,13 @@ private:
               current_local_frame.col(0) = basis1;
               current_local_frame.col(1) = basis2;
 
-              target_plane_local_frames.block(0, 2 * i, 3, 2) =
-                  current_local_frame;
+              for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 2; ++col) {
+                  target_plane_local_frames(row, col + 2 * i) =
+                      current_local_frame(row, col);
+                }
+              }
+
               local_frame_initialized[i] = true;
             }
 
@@ -672,7 +681,11 @@ private:
                          (line_direction_3d.transpose() * face_vtx_pos);
           }
 
-          B.block(3 * i, 0, 3, 3) = target_pos.transpose();
+          for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+              B(3 * i + row, col) = target_pos(col, row);
+            }
+          }
         }
       }
 
