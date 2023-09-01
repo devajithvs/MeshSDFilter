@@ -639,12 +639,26 @@ private:
                 local_coord.transpose() * local_coord;
 
             // Perform eigenvalue decomposition on the covariance matrix
-            Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigen_solver(
-                local_coord_covariance);
-
-            // Extract the eigenvector corresponding to the largest eigenvalue
             Eigen::Vector2d fitting_line_direction =
-                eigen_solver.eigenvectors().col(1);
+                Eigen::Vector2d::Random(); // Initial guess
+
+            const int maxIterations = 1000;
+            const double tolerance = 1e-6;
+
+            for (int iter = 0; iter < maxIterations; ++iter) {
+              Eigen::Vector2d new_direction =
+                  local_coord_covariance * fitting_line_direction;
+              double new_magnitude = new_direction.norm();
+              new_direction /= new_magnitude;
+
+              if (std::abs(new_magnitude - fitting_line_direction.norm()) <
+                  tolerance) {
+                fitting_line_direction = new_direction;
+                break;
+              }
+
+              fitting_line_direction = new_direction;
+            }
 
             // Project the 2D fitting line direction into 3D space
             Eigen::Vector3d line_direction_3d =
