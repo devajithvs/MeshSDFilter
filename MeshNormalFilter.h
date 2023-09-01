@@ -680,7 +680,7 @@ private:
 
               for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 2; ++col) {
-                  target_plane_local_frames(row, col + 2 * i) =
+                  target_plane_local_frames.data()[row + 3 * (col + 2 * i)] =
                       current_local_frame.data()[row + 3 * col];
                 }
               }
@@ -766,38 +766,38 @@ private:
 
             // Project the 2D fitting line direction into 3D space
             Eigen::Vector3d line_direction_3d;
-            for (int i = 0; i < 3; ++i) {
-              line_direction_3d(i) = 0.0;
-              for (int j = 0; j < 2; ++j) {
-                line_direction_3d(i) +=
-                    current_local_frame(i, j) * fitting_line_direction(j);
+            for (int row = 0; row < 3; ++row) {
+              line_direction_3d(row) = 0.0;
+              for (int col = 0; col < 2; ++col) {
+                line_direction_3d(row) +=
+                    current_local_frame(row, col) * fitting_line_direction(col);
               }
             }
 
             // Normalize the line direction vector
             double line_direction_3d_norm = 0.0;
-            for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
               line_direction_3d_norm +=
-                  line_direction_3d(i) * line_direction_3d(i);
+                  line_direction_3d(j) * line_direction_3d(j);
             }
             line_direction_3d_norm = std::sqrt(line_direction_3d_norm);
 
-            for (int i = 0; i < 3; ++i) {
-              line_direction_3d(i) /= line_direction_3d_norm;
+            for (int j = 0; j < 3; ++j) {
+              line_direction_3d(j) /= line_direction_3d_norm;
             }
 
             // Project the points onto the fitting line in the target plane
             Eigen::Matrix<double, 1, 3> tmp;
-            for (int i = 0; i < 3; ++i) {
-              tmp(i) = 0.0;
-              for (int j = 0; j < 3; ++j) {
-                tmp(i) += line_direction_3d(j) * face_vtx_pos(j, i);
+            for (int r = 0; r < 3; ++r) {
+              tmp(r) = 0.0;
+              for (int c = 0; c < 3; ++c) {
+                tmp(r) += line_direction_3d(c) * face_vtx_pos(c, r);
               }
             }
 
-            for (int i = 0; i < 3; ++i) {
-              for (int j = 0; j < 3; ++j) {
-                target_pos(i, j) = line_direction_3d(i) * tmp(j);
+            for (int r = 0; r < 3; ++r) {
+              for (int c = 0; c < 3; ++c) {
+                target_pos(r, c) = line_direction_3d(r) * tmp(c);
               }
             }
           }
