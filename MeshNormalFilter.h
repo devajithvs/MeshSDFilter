@@ -155,9 +155,9 @@ public:
     }
 
     // if (print_error_evaluation_) {
-      std::cout << std::endl;
-      show_normalized_mesh_displacement_norm(output_mesh);
-      show_normal_error_statistics(output_mesh, target_normals, 2, 10);
+    std::cout << std::endl;
+    show_normalized_mesh_displacement_norm(output_mesh);
+    show_normal_error_statistics(output_mesh, target_normals, 2, 10);
     // }
 
     return true;
@@ -493,34 +493,116 @@ private:
 
     std::cerr << "Before all the iterations" << std::endl;
     for (int iter = 0; iter < param.mesh_update_iter; ++iter) {
+
+      std::vector<Eigen::Vector3d> current_normals(n_faces);
       OMP_PARALLEL {
         OMP_FOR
         for (int i = 0; i < n_faces; ++i) {
-          Eigen::Vector3d current_normal = to_eigen_vec3d(
+          current_normals[i] = to_eigen_vec3d(
               output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
-          Eigen::Vector3d target_normal = target_normals.col(i);
+        }
+      }
+      // OMP_PARALLEL {
+      //   OMP_FOR
+      //   for (int i = 0; i < n_faces; ++i) {
+      //     // Eigen::Vector3d current_normal = to_eigen_vec3d(
+      //     //     output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
+      //     Eigen::Vector3d current_normal = current_normals[i];
+      //     Eigen::Vector3d target_normal = target_normals.col(i);
 
-          Eigen::Matrix3d face_vtx_pos;
-          get_mean_centered_face_vtx_pos(vtx_pos, face_vtx_idx.col(i),
-                                         face_vtx_pos);
+      // Eigen::Matrix3d face_vtx_pos;
+      // for (int j = 0; j < 3; ++j) {
+      //     face_vtx_pos.col(j) = vtx_pos.col(face_vtx_idx(j,i));
+      //   }
 
-          Eigen::Matrix3Xd target_pos;
+      //     Eigen::Vector3d mean_pt = face_vtx_pos.rowwise().mean();
+      //     face_vtx_pos.colwise() -= mean_pt;
+
+      //     Eigen::Matrix3Xd target_pos;
+
+      //     // If the current normal is not pointing away from the target
+      //     normal,
+      //     // simply project the points onto the target plane
+      //     if (current_normal.dot(target_normal) >= 0) {
+      //       target_pos =
+      //           face_vtx_pos -
+      //           target_normal * (target_normal.transpose() * face_vtx_pos);
+      //     } else {
+      //       // Otherwise, project the points onto a line in the target plane
+      //       typedef Eigen::Matrix<double, 3, 2> Matrix32d;
+      //       Matrix32d current_local_frame;
+      //       if (local_frame_initialized[i]) {
+      //         current_local_frame =
+      //             target_plane_local_frames.block(0, 2 * i, 3, 2);
+      //       } else {
+      //         Eigen::JacobiSVD<Eigen::Vector3d,
+      //                          Eigen::FullPivHouseholderQRPreconditioner>
+      //             jSVD_normal(target_normal, Eigen::ComputeFullU);
+      //         current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
+      //         target_plane_local_frames.block(0, 2 * i, 3, 2) =
+      //             current_local_frame;
+      //         local_frame_initialized[i] = true;
+      //       }
+
+      //       Matrix32d local_coord =
+      //           face_vtx_pos.transpose() * current_local_frame;
+      //       Eigen::JacobiSVD<Matrix32d> jSVD_coord(local_coord,
+      //                                              Eigen::ComputeFullV);
+      //       Eigen::Vector2d fitting_line_direction =
+      //           jSVD_coord.matrixV().col(0);
+      //       Eigen::Vector3d line_direction_3d =
+      //           current_local_frame * fitting_line_direction;
+      //       target_pos = line_direction_3d *
+      //                    (line_direction_3d.transpose() * face_vtx_pos);
+      //     }
+
+      //     B.block(3 * i, 0, 3, 3) = target_pos.transpose();
+      //   }
+      // }
+      OMP_PARALLEL {
+        OMP_FOR
+        for (int i = 0; i < n_faces; ++i) {
+          Eigen::Matrix<double, 3, 1> current_normal = current_normals[i];
+          Eigen::Matrix<double, 3, 1> target_normal = target_normals.col(i);
+
+          Eigen::Matrix<double, 3, 3> face_vtx_pos;
+          for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 3; ++k) {
+              face_vtx_pos.data()[k + 3 * j] =
+                  vtx_pos.data()[k + 3 * face_vtx_idx.data()[j + 3 * i]];
+            }
+          }
+
+          Eigen::Matrix<double, 3, 1> mean_pt;
+          for (int j = 0; j < 3; ++j) {
+            double sum = 0.0;
+            for (int k = 0; k < face_vtx_pos.cols(); ++k) {
+              sum += face_vtx_pos(j, k);
+            }
+            mean_pt(j) = sum / face_vtx_pos.cols();
+          }
+
+          for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < face_vtx_pos.cols(); ++k) {
+              face_vtx_pos(j, k) -= mean_pt(j);
+            }
+          }
 
           // If the current normal is not pointing away from the target normal,
           // simply project the points onto the target plane
+          Eigen::Matrix<double, 3, -1> target_pos;
           if (current_normal.dot(target_normal) >= 0) {
             target_pos =
                 face_vtx_pos -
                 target_normal * (target_normal.transpose() * face_vtx_pos);
           } else {
             // Otherwise, project the points onto a line in the target plane
-            typedef Eigen::Matrix<double, 3, 2> Matrix32d;
-            Matrix32d current_local_frame;
+            Eigen::Matrix<double, 3, 2> current_local_frame;
             if (local_frame_initialized[i]) {
               current_local_frame =
                   target_plane_local_frames.block(0, 2 * i, 3, 2);
             } else {
-              Eigen::JacobiSVD<Eigen::Vector3d,
+              Eigen::JacobiSVD<Eigen::Matrix<double, 3, 1>,
                                Eigen::FullPivHouseholderQRPreconditioner>
                   jSVD_normal(target_normal, Eigen::ComputeFullU);
               current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
@@ -529,11 +611,11 @@ private:
               local_frame_initialized[i] = true;
             }
 
-            Matrix32d local_coord =
+            Eigen::Matrix<double, 3, 2> local_coord =
                 face_vtx_pos.transpose() * current_local_frame;
-            Eigen::JacobiSVD<Matrix32d> jSVD_coord(local_coord,
-                                                   Eigen::ComputeFullV);
-            Eigen::Vector2d fitting_line_direction =
+            Eigen::JacobiSVD<Eigen::Matrix<double, 3, 2>> jSVD_coord(
+                local_coord, Eigen::ComputeFullV);
+            Eigen::Matrix<double, 2, 1> fitting_line_direction =
                 jSVD_coord.matrixV().col(0);
             Eigen::Vector3d line_direction_3d =
                 current_local_frame * fitting_line_direction;
