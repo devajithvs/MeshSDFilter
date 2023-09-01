@@ -601,10 +601,11 @@ private:
               for (int j = 0; j < 3; ++j) {
                 double dot_product = 0.0;
                 for (int k = 0; k < 3; ++k) {
-                  dot_product += target_normal(k) * face_vtx_pos(k, p);
+                  dot_product +=
+                      target_normal(k) * face_vtx_pos.data()[k + 3 * p];
                 }
-                target_pos(j, p) =
-                    face_vtx_pos(j, p) - dot_product * target_normal(j);
+                target_pos.data()[j + 3 * p] = face_vtx_pos.data()[j + 3 * p] -
+                                               dot_product * target_normal(j);
               }
             }
           } else {
@@ -613,8 +614,8 @@ private:
             if (local_frame_initialized[i]) {
               for (int r = 0; r < 3; ++r) {
                 for (int c = 0; c < 2; ++c) {
-                  current_local_frame(r, c) =
-                      target_plane_local_frames(r, 2 * i + c);
+                  current_local_frame.data()[r + 3 * c] =
+                      target_plane_local_frames.data()[r + 3 * (2 * i + c)];
                 }
               }
             } else {
@@ -629,7 +630,7 @@ private:
               }
 
               Eigen::Vector3d basis1(1.0, 0.0, 0.0);
-              if (std::abs(normalized_normal.dot(basis1)) > 0.9) {
+              if (std::abs(normalized_normal(0)) > 0.9) {
                 basis1 = Eigen::Vector3d(0.0, 1.0, 0.0);
               }
 
@@ -673,14 +674,14 @@ private:
               }
 
               for (int j = 0; j < 3; ++j) {
-                current_local_frame(j, 0) = basis1(j);
-                current_local_frame(j, 1) = basis2(j);
+                current_local_frame.data()[j] = basis1(j);
+                current_local_frame.data()[j + 3 * 1] = basis2(j);
               }
 
               for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 2; ++col) {
                   target_plane_local_frames(row, col + 2 * i) =
-                      current_local_frame(row, col);
+                      current_local_frame.data()[row + 3 * col];
                 }
               }
 
@@ -690,10 +691,11 @@ private:
             Eigen::Matrix<double, 3, 2> local_coord;
             for (int row = 0; row < 3; ++row) {
               for (int col = 0; col < 2; ++col) {
-                local_coord(row, col) = 0.0;
+                local_coord.data()[row + 3 * col] = 0.0;
                 for (int k = 0; k < 3; ++k) {
-                  local_coord(row, col) +=
-                      face_vtx_pos(k, row) * current_local_frame(k, col);
+                  local_coord.data()[row + 3 * col] +=
+                      face_vtx_pos.data()[k + 3 * row] *
+                      current_local_frame.data()[k + 3 * col];
                 }
               }
             }
@@ -702,10 +704,11 @@ private:
             Eigen::Matrix<double, 2, 2> local_coord_covariance;
             for (int row = 0; row < 2; ++row) {
               for (int col = 0; col < 2; ++col) {
-                local_coord_covariance(row, col) = 0.0;
+                local_coord_covariance.data()[row + 3 * col] = 0.0;
                 for (int k = 0; k < 3; ++k) {
-                  local_coord_covariance(row, col) +=
-                      local_coord(k, row) * local_coord(k, col);
+                  local_coord_covariance.data()[row + 3 * col] +=
+                      local_coord.data()[k + 3 * row] *
+                      local_coord.data()[k + 3 * col];
                 }
               }
             }
@@ -723,8 +726,9 @@ private:
               for (int row = 0; row < 2; ++row) {
                 new_direction(row) = 0.0;
                 for (int col = 0; col < 2; ++col) {
-                  new_direction(row) += local_coord_covariance(row, col) *
-                                        fitting_line_direction(col);
+                  new_direction(row) +=
+                      local_coord_covariance.data()[row + 3 * col] *
+                      fitting_line_direction(col);
                 }
               }
 
