@@ -576,31 +576,35 @@ private:
           Eigen::Matrix<double, 3, 1> mean_pt;
           for (int j = 0; j < 3; ++j) {
             double sum = 0.0;
-            for (int k = 0; k < face_vtx_pos.cols(); ++k) {
-              sum += face_vtx_pos(j, k);
+            for (int k = 0; k < 3; ++k) {
+              sum += face_vtx_pos.data()[j + 3 * k];
             }
-            mean_pt(j) = sum / face_vtx_pos.cols();
+            mean_pt.data()[j] = sum / 3;
           }
 
           for (int j = 0; j < 3; ++j) {
-            for (int k = 0; k < face_vtx_pos.cols(); ++k) {
-              face_vtx_pos(j, k) -= mean_pt(j);
+            for (int k = 0; k < 3; ++k) {
+              face_vtx_pos.data()[j + 3 * k] -= mean_pt.data()[j];
             }
           }
 
           // If the current normal is not pointing away from the target normal,
           // simply project the points onto the target plane
-          Eigen::Matrix<double, 3, Eigen::Dynamic> target_pos(
-              3, face_vtx_pos.cols());
-          if (current_normal.dot(target_normal) >= 0) {
-            for (int i = 0; i < face_vtx_pos.cols(); ++i) {
+          Eigen::Matrix<double, 3, 3> target_pos(3, 3);
+
+          double dot_product_normal =
+              current_normal.data()[0] * target_normal.data()[0] +
+              current_normal.data()[1] * target_normal.data()[1] +
+              current_normal.data()[2] * target_normal.data()[2];
+          if (dot_product_normal >= 0) {
+            for (int p = 0; p < 3; ++p) {
               for (int j = 0; j < 3; ++j) {
                 double dot_product = 0.0;
                 for (int k = 0; k < 3; ++k) {
-                  dot_product += target_normal(k) * face_vtx_pos(k, i);
+                  dot_product += target_normal(k) * face_vtx_pos(k, p);
                 }
-                target_pos(j, i) =
-                    face_vtx_pos(j, i) - dot_product * target_normal(j);
+                target_pos(j, p) =
+                    face_vtx_pos(j, p) - dot_product * target_normal(j);
               }
             }
           } else {
