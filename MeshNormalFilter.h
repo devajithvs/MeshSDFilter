@@ -590,11 +590,19 @@ private:
 
           // If the current normal is not pointing away from the target normal,
           // simply project the points onto the target plane
-          Eigen::Matrix<double, 3, -1> target_pos;
+          Eigen::Matrix<double, 3, Eigen::Dynamic> target_pos(
+              3, face_vtx_pos.cols());
           if (current_normal.dot(target_normal) >= 0) {
-            target_pos =
-                face_vtx_pos -
-                target_normal * (target_normal.transpose() * face_vtx_pos);
+            for (int i = 0; i < face_vtx_pos.cols(); ++i) {
+              for (int j = 0; j < 3; ++j) {
+                double dot_product = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                  dot_product += target_normal(k) * face_vtx_pos(k, i);
+                }
+                target_pos(j, i) =
+                    face_vtx_pos(j, i) - dot_product * target_normal(j);
+              }
+            }
           } else {
             // Otherwise, project the points onto a line in the target plane
             Eigen::Matrix<double, 3, 2> current_local_frame;
