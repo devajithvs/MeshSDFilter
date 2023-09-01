@@ -688,7 +688,6 @@ private:
             }
 
             Eigen::Matrix<double, 3, 2> local_coord;
-            // face_vtx_pos.transpose() * current_local_frame;
             for (int row = 0; row < 3; ++row) {
               for (int col = 0; col < 2; ++col) {
                 local_coord(row, col) = 0.0;
@@ -701,7 +700,6 @@ private:
 
             // Compute the covariance matrix of local coordinates
             Eigen::Matrix<double, 2, 2> local_coord_covariance;
-            // = local_coord.transpose() * local_coord;
             for (int row = 0; row < 2; ++row) {
               for (int col = 0; col < 2; ++col) {
                 local_coord_covariance(row, col) = 0.0;
@@ -722,11 +720,11 @@ private:
               Eigen::Vector2d new_direction;
 
               // Calculate new_direction using loops
-              for (int i = 0; i < 2; ++i) {
-                new_direction(i) = 0.0;
-                for (int j = 0; j < 2; ++j) {
-                  new_direction(i) +=
-                      local_coord_covariance(i, j) * fitting_line_direction(j);
+              for (int row = 0; row < 2; ++row) {
+                new_direction(row) = 0.0;
+                for (int col = 0; col < 2; ++col) {
+                  new_direction(row) += local_coord_covariance(row, col) *
+                                        fitting_line_direction(col);
                 }
               }
 
@@ -763,39 +761,40 @@ private:
             }
 
             // Project the 2D fitting line direction into 3D space
-            // Eigen::Vector3d line_direction_3d =
-                // current_local_frame * fitting_line_direction;
             Eigen::Vector3d line_direction_3d;
             for (int i = 0; i < 3; ++i) {
-                line_direction_3d(i) = 0.0;
-                for (int j = 0; j < 2; ++j) {
-                    line_direction_3d(i) += current_local_frame(i, j) *
-                    fitting_line_direction(j);
-                }
+              line_direction_3d(i) = 0.0;
+              for (int j = 0; j < 2; ++j) {
+                line_direction_3d(i) +=
+                    current_local_frame(i, j) * fitting_line_direction(j);
+              }
             }
 
             // Normalize the line direction vector
-            // line_direction_3d.normalize();
             double line_direction_3d_norm = 0.0;
             for (int i = 0; i < 3; ++i) {
-                line_direction_3d_norm += line_direction_3d(i) *
-                line_direction_3d(i);
+              line_direction_3d_norm +=
+                  line_direction_3d(i) * line_direction_3d(i);
             }
             line_direction_3d_norm = std::sqrt(line_direction_3d_norm);
 
             for (int i = 0; i < 3; ++i) {
-                line_direction_3d(i) /= line_direction_3d_norm;
+              line_direction_3d(i) /= line_direction_3d_norm;
             }
 
             // Project the points onto the fitting line in the target plane
-            // target_pos = line_direction_3d *
-            //              (line_direction_3d.transpose() * face_vtx_pos);
+            Eigen::Matrix<double, 1, 3> tmp;
             for (int i = 0; i < 3; ++i) {
-                target_pos(i) = 0.0;
-                for (int j = 0; j < 3; ++j) {
-                    target_pos(i) += line_direction_3d(i) *
-                    (line_direction_3d(j) * face_vtx_pos(j, i));
-                }
+              tmp(i) = 0.0;
+              for (int j = 0; j < 3; ++j) {
+                tmp(i) += line_direction_3d(j) * face_vtx_pos(j, i);
+              }
+            }
+
+            for (int i = 0; i < 3; ++i) {
+              for (int j = 0; j < 3; ++j) {
+                target_pos(i, j) = line_direction_3d(i) * tmp(j);
+              }
             }
           }
 
