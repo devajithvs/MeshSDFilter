@@ -40,6 +40,536 @@
 
 namespace SDFilter {
 
+__global__ void computeBKernel(int n_faces, const double *current_normals,
+                               const double *target_normals,
+                               const int *face_vtx_idx, const double *vtx_pos,
+                               bool *local_frame_initialized,
+                               double *target_plane_local_frames, double *B) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < n_faces) {
+    double current_normal[3];
+    double target_normal[3];
+
+    for (int i = 0; i < 3; ++i) {
+      current_normal[i] = current_normals[tid + 3 * i];
+      target_normal[i] = target_normals[i + 3 * tid];
+      // TODO: Check: [i ,tid]
+    }
+
+    double face_vtx_pos[9];
+    for (int j = 0; j < 3; ++j) {
+      for (int k = 0; k < 3; ++k) {
+        face_vtx_pos[k + 3 * j] = vtx_pos[k + 3 * face_vtx_idx[j + 3 * tid]];
+      }
+    }
+
+    double mean_pt[3] = {0.0};
+    for (int j = 0; j < 3; ++j) {
+      double sum = 0.0;
+      for (int k = 0; k < 3; ++k) {
+        sum += face_vtx_pos[j + 3 * k];
+      }
+      mean_pt[j] = sum / 3;
+    }
+
+    for (int j = 0; j < 3; ++j) {
+      for (int k = 0; k < 3; ++k) {
+        face_vtx_pos[j + 3 * k] -= mean_pt[j];
+      }
+    }
+
+    double target_pos[9];
+
+    double dot_product_normal = current_normal[0] * target_normal[0] +
+                                current_normal[1] * target_normal[1] +
+                                current_normal[2] * target_normal[2];
+
+    // If the current normal is not pointing away from the target normal,
+    // simply project the points onto the target plane
+    if (dot_product_normal >= 0) {
+      for (int p = 0; p < 3; ++p) {
+        for (int j = 0; j < 3; ++j) {
+          double dot_product = 0.0;
+          for (int k = 0; k < 3; ++k) {
+            dot_product += target_normals[k] * face_vtx_pos[k + 3 * p];
+          }
+          target_pos[j + 3 * p] =
+              face_vtx_pos[j + 3 * p] - dot_product * target_normal[j];
+        }
+      }
+    } else {
+      // Otherwise, project the points onto a line in the target plane
+      double current_local_frame[6];
+      if (local_frame_initialized[tid]) {
+        for (int r = 0; r < 3; ++r) {
+          for (int c = 0; c < 2; ++c) {
+            current_local_frame[r + 3 * c] =
+                target_plane_local_frames[r + 3 * (2 * tid + c)];
+          }
+        }
+      } else {
+        double normalized_normal[3];
+        double norm = 0.0;
+        for (int j = 0; j < 3; ++j) {
+          norm += target_normal[j] * target_normal[j];
+        }
+        norm = std::sqrt(norm);
+        for (int j = 0; j < 3; ++j) {
+          normalized_normal[j] = target_normal[j] / norm;
+        }
+
+        double basis1[3] = {1.0, 0.0, 0.0};
+        if (std::abs(normalized_normal[0]) > 0.9) {
+          basis1[0] = 0;
+          basis1[1] = 1;
+        }
+
+        double basis2[3];
+        // Compute cross product
+        basis2[0] =
+            normalized_normal[1] * basis1[2] - normalized_normal[2] * basis1[1];
+        basis2[1] =
+            normalized_normal[2] * basis1[0] - normalized_normal[0] * basis1[2];
+        basis2[2] =
+            normalized_normal[0] * basis1[1] - normalized_normal[1] * basis1[0];
+
+        // Normalize basis2
+        double basis2Norm = 0.0;
+        for (int j = 0; j < 3; ++j) {
+          basis2Norm += basis2[j] * basis2[j];
+        }
+        basis2Norm = std::sqrt(basis2Norm);
+
+        for (int j = 0; j < 3; ++j) {
+          basis2[j] /= basis2Norm;
+        }
+
+        // Compute cross product
+        basis1[0] =
+            basis2[1] * normalized_normal[2] - basis2[2] * normalized_normal[1];
+        basis1[1] =
+            basis2[2] * normalized_normal[0] - basis2[0] * normalized_normal[2];
+        basis1[2] =
+            basis2[0] * normalized_normal[1] - basis2[1] * normalized_normal[0];
+
+        // Normalize basis1
+        double basis1Norm = 0.0;
+        for (int j = 0; j < 3; ++j) {
+          basis1Norm += basis1[j] * basis1[j];
+        }
+        basis1Norm = std::sqrt(basis1Norm);
+
+        for (int j = 0; j < 3; ++j) {
+          basis1[j] /= basis1Norm;
+        }
+
+        for (int j = 0; j < 3; ++j) {
+          current_local_frame[j] = basis1[j];
+          current_local_frame[j + 3 * 1] = basis2[j];
+        }
+
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 2; ++col) {
+            target_plane_local_frames[row + 3 * (col + 2 * tid)] =
+                current_local_frame[row + 3 * col];
+          }
+        }
+
+        local_frame_initialized[tid] = true;
+      }
+
+      double local_coord[6];
+      for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 2; ++col) {
+          local_coord[row + 3 * col] = 0.0;
+          for (int k = 0; k < 3; ++k) {
+            local_coord[row + 3 * col] +=
+                face_vtx_pos[k + 3 * row] * current_local_frame[k + 3 * col];
+          }
+        }
+      }
+
+      // Compute the covariance matrix of local coordinates
+      double local_coord_covariance[4];
+      for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 2; ++col) {
+          local_coord_covariance[row + 3 * col] = 0.0;
+          for (int k = 0; k < 3; ++k) {
+            local_coord_covariance[row + 3 * col] +=
+                local_coord[k + 3 * row] * local_coord[k + 3 * col];
+          }
+        }
+      }
+
+      // Perform eigenvalue decomposition on the covariance matrix
+      double fitting_line_direction[2] = {1.0, 1.0}; // Initial guess
+
+      const int maxIterations = 1000;
+      const double tolerance = 1e-6;
+
+      for (int iter = 0; iter < maxIterations; ++iter) {
+        double new_direction[2];
+
+        // Calculate new_direction using loops
+        for (int row = 0; row < 2; ++row) {
+          new_direction[row] = 0.0;
+          for (int col = 0; col < 2; ++col) {
+            new_direction[row] += local_coord_covariance[row + 3 * col] *
+                                  fitting_line_direction[col];
+          }
+        }
+
+        // Normalize basis1
+        double new_magnitude = 0.0;
+        for (int j = 0; j < 2; ++j) {
+          new_magnitude += new_direction[j] * new_direction[j];
+        }
+        new_magnitude = std::sqrt(new_magnitude);
+
+        for (int j = 0; j < 2; ++j) {
+          new_direction[j] /= new_magnitude;
+        }
+
+        double fitting_line_direction_norm = 0.0;
+        for (int j = 0; j < 2; ++j) {
+          fitting_line_direction_norm +=
+              fitting_line_direction[j] * fitting_line_direction[j];
+        }
+        fitting_line_direction_norm = std::sqrt(fitting_line_direction_norm);
+
+        if (std::abs(new_magnitude - fitting_line_direction_norm) < tolerance) {
+          for (int j = 0; j < 2; ++j) {
+            fitting_line_direction[j] = new_direction[j];
+          }
+          break;
+        }
+
+        for (int j = 0; j < 2; ++j) {
+          fitting_line_direction[j] = new_direction[j];
+        }
+      }
+
+      // Project the 2D fitting line direction into 3D space
+      double line_direction_3d[3];
+      for (int row = 0; row < 3; ++row) {
+        line_direction_3d[row] = 0.0;
+        for (int col = 0; col < 2; ++col) {
+          line_direction_3d[row] +=
+              current_local_frame[row + 3 * col] * fitting_line_direction[col];
+        }
+      }
+
+      // Normalize the line direction vector
+      double line_direction_3d_norm = 0.0;
+      for (int j = 0; j < 3; ++j) {
+        line_direction_3d_norm += line_direction_3d[j] * line_direction_3d[j];
+      }
+      line_direction_3d_norm = std::sqrt(line_direction_3d_norm);
+
+      for (int j = 0; j < 3; ++j) {
+        line_direction_3d[j] /= line_direction_3d_norm;
+      }
+
+      // Project the points onto the fitting line in the target plane
+      double tmp[3];
+      for (int row = 0; row < 3; ++row) {
+        tmp[row] = 0.0;
+        for (int col = 0; col < 3; ++col) {
+          tmp[row] += line_direction_3d[col] * face_vtx_pos[col + 3 * row];
+        }
+      }
+
+      for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+          target_pos[row + 3 * col] = line_direction_3d[row] * tmp[col];
+        }
+      }
+    }
+
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        B[3 * tid + row + 3 * n_faces * col] = target_pos[col + 3 * row];
+      }
+    }
+  }
+}
+
+int temp() {
+  int n_faces = 10000;
+  int threadsPerBlock = 256;
+  int blocksPerGrid = (n_faces + threadsPerBlock - 1) / threadsPerBlock;
+
+  // projectPointsKernel<<<blocksPerGrid, threadsPerBlock>>>(n_faces,
+  //     current_normals, target_normals, face_vtx_pos, target_pos);
+
+  cudaDeviceSynchronize();
+  // ... Copy results back to host and perform cleanup ...
+
+  return 0;
+}
+
+void processFacesSimplified(
+    const int n_faces,
+    const std::vector<Eigen::Matrix<double, 3, 1>> &current_normals,
+    const Eigen::Matrix<double, 3, Eigen::Dynamic> &target_normals,
+    const Matrix3Xi &face_vtx_idx, std::vector<bool> &local_frame_initialized,
+    Eigen::Matrix3Xd &target_plane_local_frames,
+    const Eigen::Matrix<double, Eigen::Dynamic, 1> &vtx_pos,
+    Eigen::MatrixX3d &B) {
+  OMP_PARALLEL {
+    OMP_FOR
+    for (int i = 0; i < n_faces; ++i) {
+      Eigen::Matrix<double, 3, 1> current_normal = current_normals[i];
+      Eigen::Matrix<double, 3, 1> target_normal = target_normals.col(i);
+
+      Eigen::Matrix<double, 3, 3> face_vtx_pos;
+      for (int j = 0; j < 3; ++j) {
+        for (int k = 0; k < 3; ++k) {
+          face_vtx_pos.data()[k + 3 * j] =
+              vtx_pos.data()[k + 3 * face_vtx_idx.data()[j + 3 * i]];
+        }
+      }
+
+      Eigen::Matrix<double, 3, 1> mean_pt;
+      for (int j = 0; j < 3; ++j) {
+        double sum = 0.0;
+        for (int k = 0; k < 3; ++k) {
+          sum += face_vtx_pos.data()[j + 3 * k];
+        }
+        mean_pt.data()[j] = sum / 3;
+      }
+
+      for (int j = 0; j < 3; ++j) {
+        for (int k = 0; k < 3; ++k) {
+          face_vtx_pos.data()[j + 3 * k] -= mean_pt.data()[j];
+        }
+      }
+
+      // If the current normal is not pointing away from the target normal,
+      // simply project the points onto the target plane
+      Eigen::Matrix<double, 3, 3> target_pos(3, 3);
+
+      double dot_product_normal =
+          current_normal.data()[0] * target_normal.data()[0] +
+          current_normal.data()[1] * target_normal.data()[1] +
+          current_normal.data()[2] * target_normal.data()[2];
+      if (dot_product_normal >= 0) {
+        for (int p = 0; p < 3; ++p) {
+          for (int j = 0; j < 3; ++j) {
+            double dot_product = 0.0;
+            for (int k = 0; k < 3; ++k) {
+              dot_product += target_normal(k) * face_vtx_pos.data()[k + 3 * p];
+            }
+            target_pos.data()[j + 3 * p] =
+                face_vtx_pos.data()[j + 3 * p] - dot_product * target_normal(j);
+          }
+        }
+      } else {
+        // Otherwise, project the points onto a line in the target plane
+        Eigen::Matrix<double, 3, 2> current_local_frame;
+        if (local_frame_initialized[i]) {
+          for (int r = 0; r < 3; ++r) {
+            for (int c = 0; c < 2; ++c) {
+              current_local_frame.data()[r + 3 * c] =
+                  target_plane_local_frames.data()[r + 3 * (2 * i + c)];
+            }
+          }
+        } else {
+          Eigen::Vector3d normalized_normal;
+          double norm = 0.0;
+          for (int j = 0; j < 3; ++j) {
+            norm += target_normal(j) * target_normal(j);
+          }
+          norm = std::sqrt(norm);
+          for (int j = 0; j < 3; ++j) {
+            normalized_normal(j) = target_normal(j) / norm;
+          }
+
+          Eigen::Vector3d basis1(1.0, 0.0, 0.0);
+          if (std::abs(normalized_normal(0)) > 0.9) {
+            basis1 = Eigen::Vector3d(0.0, 1.0, 0.0);
+          }
+
+          Eigen::Vector3d basis2;
+          // Compute cross product
+          basis2(0) = normalized_normal(1) * basis1(2) -
+                      normalized_normal(2) * basis1(1);
+          basis2(1) = normalized_normal(2) * basis1(0) -
+                      normalized_normal(0) * basis1(2);
+          basis2(2) = normalized_normal(0) * basis1(1) -
+                      normalized_normal(1) * basis1(0);
+
+          // Normalize basis2
+          double basis2Norm = 0.0;
+          for (int j = 0; j < 3; ++j) {
+            basis2Norm += basis2(j) * basis2(j);
+          }
+          basis2Norm = std::sqrt(basis2Norm);
+
+          for (int j = 0; j < 3; ++j) {
+            basis2(j) /= basis2Norm;
+          }
+
+          // Compute cross product
+          basis1(0) = basis2(1) * normalized_normal(2) -
+                      basis2(2) * normalized_normal(1);
+          basis1(1) = basis2(2) * normalized_normal(0) -
+                      basis2(0) * normalized_normal(2);
+          basis1(2) = basis2(0) * normalized_normal(1) -
+                      basis2(1) * normalized_normal(0);
+
+          // Normalize basis1
+          double basis1Norm = 0.0;
+          for (int j = 0; j < 3; ++j) {
+            basis1Norm += basis1(j) * basis1(j);
+          }
+          basis1Norm = std::sqrt(basis1Norm);
+
+          for (int j = 0; j < 3; ++j) {
+            basis1(j) /= basis1Norm;
+          }
+
+          for (int j = 0; j < 3; ++j) {
+            current_local_frame.data()[j] = basis1(j);
+            current_local_frame.data()[j + 3 * 1] = basis2(j);
+          }
+
+          for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 2; ++col) {
+              target_plane_local_frames.data()[row + 3 * (col + 2 * i)] =
+                  current_local_frame.data()[row + 3 * col];
+            }
+          }
+
+          local_frame_initialized[i] = true;
+        }
+
+        Eigen::Matrix<double, 3, 2> local_coord;
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 2; ++col) {
+            local_coord.data()[row + 3 * col] = 0.0;
+            for (int k = 0; k < 3; ++k) {
+              local_coord.data()[row + 3 * col] +=
+                  face_vtx_pos.data()[k + 3 * row] *
+                  current_local_frame.data()[k + 3 * col];
+            }
+          }
+        }
+
+        // Compute the covariance matrix of local coordinates
+        Eigen::Matrix<double, 2, 2> local_coord_covariance;
+        for (int row = 0; row < 2; ++row) {
+          for (int col = 0; col < 2; ++col) {
+            local_coord_covariance.data()[row + 3 * col] = 0.0;
+            for (int k = 0; k < 3; ++k) {
+              local_coord_covariance.data()[row + 3 * col] +=
+                  local_coord.data()[k + 3 * row] *
+                  local_coord.data()[k + 3 * col];
+            }
+          }
+        }
+
+        // Perform eigenvalue decomposition on the covariance matrix
+        Eigen::Vector2d fitting_line_direction(1.0, 1.0); // Initial guess
+
+        const int maxIterations = 1000;
+        const double tolerance = 1e-6;
+
+        for (int iter = 0; iter < maxIterations; ++iter) {
+          Eigen::Vector2d new_direction;
+
+          // Calculate new_direction using loops
+          for (int row = 0; row < 2; ++row) {
+            new_direction(row) = 0.0;
+            for (int col = 0; col < 2; ++col) {
+              new_direction(row) +=
+                  local_coord_covariance.data()[row + 3 * col] *
+                  fitting_line_direction(col);
+            }
+          }
+
+          // Normalize basis1
+          double new_magnitude = 0.0;
+          for (int j = 0; j < 2; ++j) {
+            new_magnitude += new_direction(j) * new_direction(j);
+          }
+          new_magnitude = std::sqrt(new_magnitude);
+
+          for (int j = 0; j < 2; ++j) {
+            new_direction(j) /= new_magnitude;
+          }
+
+          double fitting_line_direction_norm = 0.0;
+          for (int j = 0; j < 2; ++j) {
+            fitting_line_direction_norm +=
+                fitting_line_direction(j) * fitting_line_direction(j);
+          }
+          fitting_line_direction_norm = std::sqrt(fitting_line_direction_norm);
+
+          if (std::abs(new_magnitude - fitting_line_direction_norm) <
+              tolerance) {
+            for (int j = 0; j < 2; ++j) {
+              fitting_line_direction(j) = new_direction(j);
+            }
+            break;
+          }
+
+          for (int j = 0; j < 2; ++j) {
+            fitting_line_direction(j) = new_direction(j);
+          }
+        }
+
+        // Project the 2D fitting line direction into 3D space
+        Eigen::Vector3d line_direction_3d;
+        for (int row = 0; row < 3; ++row) {
+          line_direction_3d(row) = 0.0;
+          for (int col = 0; col < 2; ++col) {
+            line_direction_3d(row) +=
+                current_local_frame.data()[row + 3 * col] *
+                fitting_line_direction(col);
+          }
+        }
+
+        // Normalize the line direction vector
+        double line_direction_3d_norm = 0.0;
+        for (int j = 0; j < 3; ++j) {
+          line_direction_3d_norm += line_direction_3d(j) * line_direction_3d(j);
+        }
+        line_direction_3d_norm = std::sqrt(line_direction_3d_norm);
+
+        for (int j = 0; j < 3; ++j) {
+          line_direction_3d(j) /= line_direction_3d_norm;
+        }
+
+        // Project the points onto the fitting line in the target plane
+        Eigen::Matrix<double, 1, 3> tmp;
+        for (int row = 0; row < 3; ++row) {
+          tmp(row) = 0.0;
+          for (int col = 0; col < 3; ++col) {
+            tmp(row) +=
+                line_direction_3d(col) * face_vtx_pos.data()[col + 3 * row];
+          }
+        }
+
+        for (int row = 0; row < 3; ++row) {
+          for (int col = 0; col < 3; ++col) {
+            target_pos.data()[row + 3 * col] =
+                line_direction_3d(row) * tmp(col);
+          }
+        }
+      }
+
+      for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+          B.data()[3 * i + row + 3 * n_faces * col] =
+              target_pos.data()[col + 3 * row];
+        }
+      }
+    }
+  }
+}
+
 class MeshFilterParameters : public Parameters {
 public:
   MeshFilterParameters()
@@ -502,317 +1032,68 @@ private:
               output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
         }
       }
-      // OMP_PARALLEL {
-      //   OMP_FOR
-      //   for (int i = 0; i < n_faces; ++i) {
-      //     // Eigen::Vector3d current_normal = to_eigen_vec3d(
-      //     //     output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
-      //     Eigen::Vector3d current_normal = current_normals[i];
-      //     Eigen::Vector3d target_normal = target_normals.col(i);
-
-      // Eigen::Matrix3d face_vtx_pos;
-      // for (int j = 0; j < 3; ++j) {
-      //     face_vtx_pos.col(j) = vtx_pos.col(face_vtx_idx(j,i));
-      //   }
-
-      //     Eigen::Vector3d mean_pt = face_vtx_pos.rowwise().mean();
-      //     face_vtx_pos.colwise() -= mean_pt;
-
-      //     Eigen::Matrix3Xd target_pos;
-
-      //     // If the current normal is not pointing away from the target
-      //     normal,
-      //     // simply project the points onto the target plane
-      //     if (current_normal.dot(target_normal) >= 0) {
-      //       target_pos =
-      //           face_vtx_pos -
-      //           target_normal * (target_normal.transpose() * face_vtx_pos);
-      //     } else {
-      //       // Otherwise, project the points onto a line in the target plane
-      //       typedef Eigen::Matrix<double, 3, 2> Matrix32d;
-      //       Matrix32d current_local_frame;
-      //       if (local_frame_initialized[i]) {
-      //         current_local_frame =
-      //             target_plane_local_frames.block(0, 2 * i, 3, 2);
-      //       } else {
-      //         Eigen::JacobiSVD<Eigen::Vector3d,
-      //                          Eigen::FullPivHouseholderQRPreconditioner>
-      //             jSVD_normal(target_normal, Eigen::ComputeFullU);
-      //         current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
-      //         target_plane_local_frames.block(0, 2 * i, 3, 2) =
-      //             current_local_frame;
-      //         local_frame_initialized[i] = true;
-      //       }
-
-      //       Matrix32d local_coord =
-      //           face_vtx_pos.transpose() * current_local_frame;
-      //       Eigen::JacobiSVD<Matrix32d> jSVD_coord(local_coord,
-      //                                              Eigen::ComputeFullV);
-      //       Eigen::Vector2d fitting_line_direction =
-      //           jSVD_coord.matrixV().col(0);
-      //       Eigen::Vector3d line_direction_3d =
-      //           current_local_frame * fitting_line_direction;
-      //       target_pos = line_direction_3d *
-      //                    (line_direction_3d.transpose() * face_vtx_pos);
-      //     }
-
-      //     B.block(3 * i, 0, 3, 3) = target_pos.transpose();
-      //   }
-      // }
       OMP_PARALLEL {
         OMP_FOR
         for (int i = 0; i < n_faces; ++i) {
-          Eigen::Matrix<double, 3, 1> current_normal = current_normals[i];
-          Eigen::Matrix<double, 3, 1> target_normal = target_normals.col(i);
+          // Eigen::Vector3d current_normal = to_eigen_vec3d(
+          //     output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
+          Eigen::Vector3d current_normal = current_normals[i];
+          Eigen::Vector3d target_normal = target_normals.col(i);
 
-          Eigen::Matrix<double, 3, 3> face_vtx_pos;
+          Eigen::Matrix3d face_vtx_pos;
           for (int j = 0; j < 3; ++j) {
-            for (int k = 0; k < 3; ++k) {
-              face_vtx_pos.data()[k + 3 * j] =
-                  vtx_pos.data()[k + 3 * face_vtx_idx.data()[j + 3 * i]];
-            }
+            face_vtx_pos.col(j) = vtx_pos.col(face_vtx_idx(j, i));
           }
 
-          Eigen::Matrix<double, 3, 1> mean_pt;
-          for (int j = 0; j < 3; ++j) {
-            double sum = 0.0;
-            for (int k = 0; k < 3; ++k) {
-              sum += face_vtx_pos.data()[j + 3 * k];
-            }
-            mean_pt.data()[j] = sum / 3;
-          }
+          Eigen::Vector3d mean_pt = face_vtx_pos.rowwise().mean();
+          face_vtx_pos.colwise() -= mean_pt;
 
-          for (int j = 0; j < 3; ++j) {
-            for (int k = 0; k < 3; ++k) {
-              face_vtx_pos.data()[j + 3 * k] -= mean_pt.data()[j];
-            }
-          }
+          Eigen::Matrix3Xd target_pos;
 
-          // If the current normal is not pointing away from the target normal,
+          // If the current normal is not pointing away from the target
+          // normal,
           // simply project the points onto the target plane
-          Eigen::Matrix<double, 3, 3> target_pos(3, 3);
-
-          double dot_product_normal =
-              current_normal.data()[0] * target_normal.data()[0] +
-              current_normal.data()[1] * target_normal.data()[1] +
-              current_normal.data()[2] * target_normal.data()[2];
-          if (dot_product_normal >= 0) {
-            for (int p = 0; p < 3; ++p) {
-              for (int j = 0; j < 3; ++j) {
-                double dot_product = 0.0;
-                for (int k = 0; k < 3; ++k) {
-                  dot_product +=
-                      target_normal(k) * face_vtx_pos.data()[k + 3 * p];
-                }
-                target_pos.data()[j + 3 * p] = face_vtx_pos.data()[j + 3 * p] -
-                                               dot_product * target_normal(j);
-              }
-            }
+          if (current_normal.dot(target_normal) >= 0) {
+            target_pos =
+                face_vtx_pos -
+                target_normal * (target_normal.transpose() * face_vtx_pos);
           } else {
             // Otherwise, project the points onto a line in the target plane
-            Eigen::Matrix<double, 3, 2> current_local_frame;
+            typedef Eigen::Matrix<double, 3, 2> Matrix32d;
+            Matrix32d current_local_frame;
             if (local_frame_initialized[i]) {
-              for (int r = 0; r < 3; ++r) {
-                for (int c = 0; c < 2; ++c) {
-                  current_local_frame.data()[r + 3 * c] =
-                      target_plane_local_frames.data()[r + 3 * (2 * i + c)];
-                }
-              }
+              current_local_frame =
+                  target_plane_local_frames.block(0, 2 * i, 3, 2);
             } else {
-              Eigen::Vector3d normalized_normal;
-              double norm = 0.0;
-              for (int j = 0; j < 3; ++j) {
-                norm += target_normal(j) * target_normal(j);
-              }
-              norm = std::sqrt(norm);
-              for (int j = 0; j < 3; ++j) {
-                normalized_normal(j) = target_normal(j) / norm;
-              }
-
-              Eigen::Vector3d basis1(1.0, 0.0, 0.0);
-              if (std::abs(normalized_normal(0)) > 0.9) {
-                basis1 = Eigen::Vector3d(0.0, 1.0, 0.0);
-              }
-
-              Eigen::Vector3d basis2;
-              // Compute cross product
-              basis2(0) = normalized_normal(1) * basis1(2) -
-                          normalized_normal(2) * basis1(1);
-              basis2(1) = normalized_normal(2) * basis1(0) -
-                          normalized_normal(0) * basis1(2);
-              basis2(2) = normalized_normal(0) * basis1(1) -
-                          normalized_normal(1) * basis1(0);
-
-              // Normalize basis2
-              double basis2Norm = 0.0;
-              for (int j = 0; j < 3; ++j) {
-                basis2Norm += basis2(j) * basis2(j);
-              }
-              basis2Norm = std::sqrt(basis2Norm);
-
-              for (int j = 0; j < 3; ++j) {
-                basis2(j) /= basis2Norm;
-              }
-
-              // Compute cross product
-              basis1(0) = basis2(1) * normalized_normal(2) -
-                          basis2(2) * normalized_normal(1);
-              basis1(1) = basis2(2) * normalized_normal(0) -
-                          basis2(0) * normalized_normal(2);
-              basis1(2) = basis2(0) * normalized_normal(1) -
-                          basis2(1) * normalized_normal(0);
-
-              // Normalize basis1
-              double basis1Norm = 0.0;
-              for (int j = 0; j < 3; ++j) {
-                basis1Norm += basis1(j) * basis1(j);
-              }
-              basis1Norm = std::sqrt(basis1Norm);
-
-              for (int j = 0; j < 3; ++j) {
-                basis1(j) /= basis1Norm;
-              }
-
-              for (int j = 0; j < 3; ++j) {
-                current_local_frame.data()[j] = basis1(j);
-                current_local_frame.data()[j + 3 * 1] = basis2(j);
-              }
-
-              for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 2; ++col) {
-                  target_plane_local_frames.data()[row + 3 * (col + 2 * i)] =
-                      current_local_frame.data()[row + 3 * col];
-                }
-              }
-
+              Eigen::JacobiSVD<Eigen::Vector3d,
+                               Eigen::FullPivHouseholderQRPreconditioner>
+                  jSVD_normal(target_normal, Eigen::ComputeFullU);
+              current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
+              target_plane_local_frames.block(0, 2 * i, 3, 2) =
+                  current_local_frame;
               local_frame_initialized[i] = true;
             }
 
-            Eigen::Matrix<double, 3, 2> local_coord;
-            for (int row = 0; row < 3; ++row) {
-              for (int col = 0; col < 2; ++col) {
-                local_coord.data()[row + 3 * col] = 0.0;
-                for (int k = 0; k < 3; ++k) {
-                  local_coord.data()[row + 3 * col] +=
-                      face_vtx_pos.data()[k + 3 * row] *
-                      current_local_frame.data()[k + 3 * col];
-                }
-              }
-            }
-
-            // Compute the covariance matrix of local coordinates
-            Eigen::Matrix<double, 2, 2> local_coord_covariance;
-            for (int row = 0; row < 2; ++row) {
-              for (int col = 0; col < 2; ++col) {
-                local_coord_covariance.data()[row + 3 * col] = 0.0;
-                for (int k = 0; k < 3; ++k) {
-                  local_coord_covariance.data()[row + 3 * col] +=
-                      local_coord.data()[k + 3 * row] *
-                      local_coord.data()[k + 3 * col];
-                }
-              }
-            }
-
-            // Perform eigenvalue decomposition on the covariance matrix
-            Eigen::Vector2d fitting_line_direction(1.0, 1.0); // Initial guess
-
-            const int maxIterations = 1000;
-            const double tolerance = 1e-6;
-
-            for (int iter = 0; iter < maxIterations; ++iter) {
-              Eigen::Vector2d new_direction;
-
-              // Calculate new_direction using loops
-              for (int row = 0; row < 2; ++row) {
-                new_direction(row) = 0.0;
-                for (int col = 0; col < 2; ++col) {
-                  new_direction(row) +=
-                      local_coord_covariance.data()[row + 3 * col] *
-                      fitting_line_direction(col);
-                }
-              }
-
-              // Normalize basis1
-              double new_magnitude = 0.0;
-              for (int j = 0; j < 2; ++j) {
-                new_magnitude += new_direction(j) * new_direction(j);
-              }
-              new_magnitude = std::sqrt(new_magnitude);
-
-              for (int j = 0; j < 2; ++j) {
-                new_direction(j) /= new_magnitude;
-              }
-
-              double fitting_line_direction_norm = 0.0;
-              for (int j = 0; j < 2; ++j) {
-                fitting_line_direction_norm +=
-                    fitting_line_direction(j) * fitting_line_direction(j);
-              }
-              fitting_line_direction_norm =
-                  std::sqrt(fitting_line_direction_norm);
-
-              if (std::abs(new_magnitude - fitting_line_direction_norm) <
-                  tolerance) {
-                for (int j = 0; j < 2; ++j) {
-                  fitting_line_direction(j) = new_direction(j);
-                }
-                break;
-              }
-
-              for (int j = 0; j < 2; ++j) {
-                fitting_line_direction(j) = new_direction(j);
-              }
-            }
-
-            // Project the 2D fitting line direction into 3D space
-            Eigen::Vector3d line_direction_3d;
-            for (int row = 0; row < 3; ++row) {
-              line_direction_3d(row) = 0.0;
-              for (int col = 0; col < 2; ++col) {
-                line_direction_3d(row) +=
-                    current_local_frame.data()[row + 3 * col] *
-                    fitting_line_direction(col);
-              }
-            }
-
-            // Normalize the line direction vector
-            double line_direction_3d_norm = 0.0;
-            for (int j = 0; j < 3; ++j) {
-              line_direction_3d_norm +=
-                  line_direction_3d(j) * line_direction_3d(j);
-            }
-            line_direction_3d_norm = std::sqrt(line_direction_3d_norm);
-
-            for (int j = 0; j < 3; ++j) {
-              line_direction_3d(j) /= line_direction_3d_norm;
-            }
-
-            // Project the points onto the fitting line in the target plane
-            Eigen::Matrix<double, 1, 3> tmp;
-            for (int row = 0; row < 3; ++row) {
-              tmp(row) = 0.0;
-              for (int col = 0; col < 3; ++col) {
-                tmp(row) +=
-                    line_direction_3d(col) * face_vtx_pos.data()[col + 3 * row];
-              }
-            }
-
-            for (int row = 0; row < 3; ++row) {
-              for (int col = 0; col < 3; ++col) {
-                target_pos.data()[row + 3 * col] =
-                    line_direction_3d(row) * tmp(col);
-              }
-            }
+            Matrix32d local_coord =
+                face_vtx_pos.transpose() * current_local_frame;
+            Eigen::JacobiSVD<Matrix32d> jSVD_coord(local_coord,
+                                                   Eigen::ComputeFullV);
+            Eigen::Vector2d fitting_line_direction =
+                jSVD_coord.matrixV().col(0);
+            Eigen::Vector3d line_direction_3d =
+                current_local_frame * fitting_line_direction;
+            target_pos = line_direction_3d *
+                         (line_direction_3d.transpose() * face_vtx_pos);
           }
 
-          for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-              B.data()[3 * i + row + 3 * n_faces * col] =
-                  target_pos.data()[col + 3 * row];
-            }
-          }
+          B.block(3 * i, 0, 3, 3) = target_pos.transpose();
         }
       }
+
+      // Call the function to process faces in parallel
+      // processFacesSimplified(n_faces, current_normals, target_normals,
+      // face_vtx_idx, local_frame_initialized, target_plane_local_frames,
+      // vtx_pos, B);
 
       // Solver linear system
       rhs = At_ * B + wX0;
