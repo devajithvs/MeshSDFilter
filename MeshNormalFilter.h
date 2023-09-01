@@ -617,55 +617,45 @@ private:
               Eigen::Vector3d normalized_normal = target_normal.normalized();
               Eigen::Vector3d basis1 = Eigen::Vector3d::UnitX();
               if (std::abs(normalized_normal.dot(basis1)) > 0.9) {
-                  basis1 = Eigen::Vector3d::UnitY();
+                basis1 = Eigen::Vector3d::UnitY();
               }
-              Eigen::Vector3d basis2 = normalized_normal.cross(basis1).normalized();
+              Eigen::Vector3d basis2 =
+                  normalized_normal.cross(basis1).normalized();
               basis1 = basis2.cross(normalized_normal).normalized();
 
               current_local_frame.col(0) = basis1;
               current_local_frame.col(1) = basis2;
-              
-              target_plane_local_frames.block(0, 2 * i, 3, 2) = current_local_frame;
+
+              target_plane_local_frames.block(0, 2 * i, 3, 2) =
+                  current_local_frame;
               local_frame_initialized[i] = true;
-              // Eigen::JacobiSVD<Eigen::Matrix<double, 3, 1>,
-              //                  Eigen::FullPivHouseholderQRPreconditioner>
-              //     jSVD_normal(target_normal, Eigen::ComputeFullU);
-              // current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
-              // target_plane_local_frames.block(0, 2 * i, 3, 2) =
-              //     current_local_frame;
-              // local_frame_initialized[i] = true;
             }
 
-            // Eigen::Matrix<double, 3, 2> local_coord =
-            //     face_vtx_pos.transpose() * current_local_frame;
-            // Eigen::JacobiSVD<Eigen::Matrix<double, 3, 2>> jSVD_coord(
-            //     local_coord, Eigen::ComputeFullV);
-            // Eigen::Matrix<double, 2, 1> fitting_line_direction =
-            //     jSVD_coord.matrixV().col(0);
-            // Eigen::Vector3d line_direction_3d =
-            //     current_local_frame * fitting_line_direction;
-            // target_pos = line_direction_3d *
-            //              (line_direction_3d.transpose() * face_vtx_pos);
-
-            Eigen::Matrix<double, 3, 2> local_coord = face_vtx_pos.transpose() * current_local_frame;
+            Eigen::Matrix<double, 3, 2> local_coord =
+                face_vtx_pos.transpose() * current_local_frame;
 
             // Compute the covariance matrix of local coordinates
-            Eigen::Matrix2d local_coord_covariance = local_coord.transpose() * local_coord;
+            Eigen::Matrix2d local_coord_covariance =
+                local_coord.transpose() * local_coord;
 
             // Perform eigenvalue decomposition on the covariance matrix
-            Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigen_solver(local_coord_covariance);
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> eigen_solver(
+                local_coord_covariance);
 
             // Extract the eigenvector corresponding to the largest eigenvalue
-            Eigen::Vector2d fitting_line_direction = eigen_solver.eigenvectors().col(1);
+            Eigen::Vector2d fitting_line_direction =
+                eigen_solver.eigenvectors().col(1);
 
             // Project the 2D fitting line direction into 3D space
-            Eigen::Vector3d line_direction_3d = current_local_frame * fitting_line_direction;
+            Eigen::Vector3d line_direction_3d =
+                current_local_frame * fitting_line_direction;
 
             // Normalize the line direction vector
             line_direction_3d.normalize();
 
             // Project the points onto the fitting line in the target plane
-            target_pos = line_direction_3d * (line_direction_3d.transpose() * face_vtx_pos);
+            target_pos = line_direction_3d *
+                         (line_direction_3d.transpose() * face_vtx_pos);
           }
 
           B.block(3 * i, 0, 3, 3) = target_pos.transpose();
