@@ -618,17 +618,64 @@ private:
                 }
               }
             } else {
-              Eigen::Vector3d normalized_normal = target_normal.normalized();
-              Eigen::Vector3d basis1 = Eigen::Vector3d::UnitX();
-              if (std::abs(normalized_normal.dot(basis1)) > 0.9) {
-                basis1 = Eigen::Vector3d::UnitY();
+              Eigen::Vector3d normalized_normal;
+              double norm = 0.0;
+              for (int j = 0; j < 3; ++j) {
+                norm += target_normal(j) * target_normal(j);
               }
-              Eigen::Vector3d basis2 =
-                  normalized_normal.cross(basis1).normalized();
-              basis1 = basis2.cross(normalized_normal).normalized();
+              norm = std::sqrt(norm);
+              for (int j = 0; j < 3; ++j) {
+                normalized_normal(j) = target_normal(j) / norm;
+              }
 
-              current_local_frame.col(0) = basis1;
-              current_local_frame.col(1) = basis2;
+              Eigen::Vector3d basis1(1.0, 0.0, 0.0);
+              if (std::abs(normalized_normal.dot(basis1)) > 0.9) {
+                basis1 = Eigen::Vector3d(0.0, 1.0, 0.0);
+              }
+
+              Eigen::Vector3d basis2;
+              // Compute cross product
+              basis2(0) = normalized_normal(1) * basis1(2) -
+                          normalized_normal(2) * basis1(1);
+              basis2(1) = normalized_normal(2) * basis1(0) -
+                          normalized_normal(0) * basis1(2);
+              basis2(2) = normalized_normal(0) * basis1(1) -
+                          normalized_normal(1) * basis1(0);
+
+              // Normalize basis2
+              double basis2Norm = 0.0;
+              for (int j = 0; j < 3; ++j) {
+                basis2Norm += basis2(j) * basis2(j);
+              }
+              basis2Norm = std::sqrt(basis2Norm);
+
+              for (int j = 0; j < 3; ++j) {
+                basis2(j) /= basis2Norm;
+              }
+
+              // Compute cross product
+              basis1(0) = basis2(1) * normalized_normal(2) -
+                          basis2(2) * normalized_normal(1);
+              basis1(1) = basis2(2) * normalized_normal(0) -
+                          basis2(0) * normalized_normal(2);
+              basis1(2) = basis2(0) * normalized_normal(1) -
+                          basis2(1) * normalized_normal(0);
+
+              // Normalize basis1
+              double basis1Norm = 0.0;
+              for (int j = 0; j < 3; ++j) {
+                basis1Norm += basis1(j) * basis1(j);
+              }
+              basis1Norm = std::sqrt(basis1Norm);
+
+              for (int j = 0; j < 3; ++j) {
+                basis1(j) /= basis1Norm;
+              }
+
+              for (int j = 0; j < 3; ++j) {
+                current_local_frame(j, 0) = basis1(j);
+                current_local_frame(j, 1) = basis2(j);
+              }
 
               for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 2; ++col) {
@@ -640,12 +687,30 @@ private:
               local_frame_initialized[i] = true;
             }
 
-            Eigen::Matrix<double, 3, 2> local_coord =
-                face_vtx_pos.transpose() * current_local_frame;
+            Eigen::Matrix<double, 3, 2> local_coord;
+            // face_vtx_pos.transpose() * current_local_frame;
+            for (int row = 0; row < 3; ++row) {
+              for (int col = 0; col < 2; ++col) {
+                local_coord(row, col) = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                  local_coord(row, col) +=
+                      face_vtx_pos(k, row) * current_local_frame(k, col);
+                }
+              }
+            }
 
             // Compute the covariance matrix of local coordinates
-            Eigen::Matrix2d local_coord_covariance =
-                local_coord.transpose() * local_coord;
+            Eigen::Matrix<double, 2, 2> local_coord_covariance;
+            // = local_coord.transpose() * local_coord;
+            for (int row = 0; row < 2; ++row) {
+              for (int col = 0; col < 2; ++col) {
+                local_coord_covariance(row, col) = 0.0;
+                for (int k = 0; k < 3; ++k) {
+                  local_coord_covariance(row, col) +=
+                      local_coord(k, row) * local_coord(k, col);
+                }
+              }
+            }
 
             // Perform eigenvalue decomposition on the covariance matrix
             Eigen::Vector2d fitting_line_direction =
