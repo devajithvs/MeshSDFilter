@@ -307,6 +307,9 @@ public:
       for (int i = 0; i < n_cols; ++i) {
         const double *b_data = rhs.col(i).data();
 
+        CUDA_CHECK(cudaMemcpyAsync(d_x, sol.col(i).data(), n * sizeof(double),
+                                   cudaMemcpyHostToDevice));
+
         CUDA_CHECK(cudaMemcpyAsync(d_b, b_data, n * sizeof(double),
                                    cudaMemcpyHostToDevice));
 
