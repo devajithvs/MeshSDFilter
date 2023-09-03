@@ -275,9 +275,9 @@ public:
 
       initializeCuSolverState(solverState);
 
-      // size_t size_chol = 0;
-      // factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
-      // d_csrVal);
+      size_t size_chol = 0;
+      factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
+      d_csrVal);
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
