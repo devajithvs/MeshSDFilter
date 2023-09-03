@@ -485,11 +485,17 @@ private:
     int n_vtx = output_mesh.n_vertices();
     Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
 
+    Timer timer;
+    Timer::EventID update_begin_time = timer.get_time();
     if (!linear_solver_.compute(M)) {
       std::cerr << "Error: failed to pre-factorize mesh update system"
                 << std::endl;
       return false;
     }
+    Timer::EventID update_end_time = timer.get_time();
+    std::cout << "Mesh factoring timing: "
+                << timer.elapsed_time(update_begin_time, update_end_time)
+                << " secs" << std::endl;
 
     std::cerr << "Before all the iterations" << std::endl;
     for (int iter = 0; iter < param.mesh_update_iter; ++iter) {
@@ -555,6 +561,11 @@ private:
       vtx_pos = sol.transpose();
       set_vertex_points(output_mesh, vtx_pos);
     }
+
+    Timer::EventID update_begin_time1 = timer.get_time();
+    std::cout << "Mesh solve timing: "
+                << timer.elapsed_time(update_end_time, update_begin_time1)
+                << " secs" << std::endl;
 
     return true;
   }
