@@ -46,11 +46,9 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   double *d_p, *d_Ax, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
 
   int k, M = 0, *I = NULL, *J = NULL;
-  int *d_col, *d_row;
   int qatest = 0;
   double *x, *rhs;
   double r0;
-  double *d_val;
   double *val = NULL;
   double *valsILU0;
   double rsum, diff, err = 0.0;
@@ -58,9 +56,6 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   double dot;
 
   //     /* Allocate required memory */
-  cudaMalloc((void **)&d_col, nz * sizeof(int));
-  cudaMalloc((void **)&d_row, (N + 1) * sizeof(int));
-  cudaMalloc((void **)&d_val, nz * sizeof(double));
   cudaMalloc((void **)&d_y, N * sizeof(double));
   cudaMalloc((void **)&d_p, N * sizeof(double));
   cudaMalloc((void **)&d_omega, N * sizeof(double));
@@ -68,16 +63,6 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cudaMalloc((void **)&d_zm1, (N) * sizeof(double));
   cudaMalloc((void **)&d_zm2, (N) * sizeof(double));
   cudaMalloc((void **)&d_rm2, (N) * sizeof(double));
-
-  /* Allocate required memory */
-  // cudaMalloc((void **)&d_p, N * sizeof(double));
-  // cudaMalloc((void **)&d_Ax, N * sizeof(double));
-  // cudaMalloc((void **)&d_y, N * sizeof(double));
-  // cudaMalloc((void **)&d_zm1, N * sizeof(double));
-  // cudaMalloc((void **)&d_zm2, N * sizeof(double));
-  // cudaMalloc((void **)&d_rm2, N * sizeof(double));
-  // cudaMalloc((void **)&d_omega, N * sizeof(double));
-  // cudaMalloc((void **)&d_valsILU0, nz * sizeof(double));
 
   /* Wrap raw data into cuSPARSE generic API objects */
   cusparseDnVecDescr_t vecp = NULL, vecX = NULL, vecY = NULL, vecR = NULL,
@@ -91,6 +76,10 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseCreateDnVec(&vecomega, N, d_omega, CUDA_R_64F);
 
   cusparseSpMatDescr_t matA = NULL;
+  cusparseCreateCsr(&matA, N, N, nz, d_csrRowPtr, d_csrColInd, d_csrVal,
+                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
   cusparseSpMatDescr_t matM_lower, matM_upper;
   cusparseFillMode_t fill_lower = CUSPARSE_FILL_MODE_LOWER;
   cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
@@ -98,10 +87,11 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
 
   /* Copy A data to ILU(0) vals as input*/
-  cudaMemcpy(d_valsILU0, d_val, nz * sizeof(double), cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_valsILU0, d_csrVal, nz * sizeof(double),
+             cudaMemcpyDeviceToDevice);
 
   // Lower Part
-  cusparseCreateCsr(&matM_lower, N, N, nz, d_row, d_col, d_valsILU0,
+  cusparseCreateCsr(&matM_lower, N, N, nz, d_csrRowPtr, d_csrColInd, d_valsILU0,
                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                     CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
@@ -110,7 +100,7 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_DIAG_TYPE, &diag_unit,
                             sizeof(diag_unit));
   // M_upper
-  cusparseCreateCsr(&matM_upper, N, N, nz, d_row, d_col, d_valsILU0,
+  cusparseCreateCsr(&matM_upper, N, N, nz, d_csrRowPtr, d_csrColInd, d_valsILU0,
                     CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                     CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
   cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_FILL_MODE, &fill_upper,
@@ -137,8 +127,9 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
                           CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSizeMV);
   cudaMalloc(&d_bufferMV, bufferSizeMV);
 
-  cusparseDcsrilu02_bufferSize(cusparseHandle, N, nz, matLU, d_val, d_row,
-                               d_col, infoILU, &bufferSizeLU);
+  cusparseDcsrilu02_bufferSize(cusparseHandle, N, nz, matLU, d_csrVal,
+                               d_csrRowPtr, d_csrColInd, infoILU,
+                               &bufferSizeLU);
   cudaMalloc(&d_bufferLU, bufferSizeLU);
 
   cusparseSpSV_createDescr(&spsvDescrL);
@@ -161,8 +152,6 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                         &doubleone, matM_upper, vecR, vecX, CUDA_R_64F,
                         CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, d_bufferU);
-
-  /* reset the initial guess of the solution to zero */
 
   k = 0;
   cublasDdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
@@ -199,17 +188,38 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
     nalpha = -alpha;
     cublasDaxpy(cublasHandle, N, &nalpha, d_omega, 1, d_r, 1);
     cublasDdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
+    printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
   }
-  printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
 
-  // cudaFree(d_p);
-  // cudaFree(d_Ax);
-  // cudaFree(d_y);
-  // cudaFree(d_zm1);
-  // cudaFree(d_zm2);
-  // cudaFree(d_rm2);
-  // cudaFree(d_omega);
-  // cudaFree(d_valsILU0);
+  if (matA) {
+    cusparseDestroySpMat(matA);
+  }
+  if (vecp) {
+    cusparseDestroyDnVec(vecp);
+  }
+  if (vecX) {
+    cusparseDestroyDnVec(vecX);
+  }
+  if (vecY) {
+    cusparseDestroyDnVec(vecY);
+  }
+  if (vecR) {
+    cusparseDestroyDnVec(vecR);
+  }
+  if (vecZM1) {
+    cusparseDestroyDnVec(vecZM1);
+  }
+  if (vecomega) {
+    cusparseDestroyDnVec(vecomega);
+  }
+
+  cudaFree(d_y);
+  cudaFree(d_p);
+  cudaFree(d_omega);
+  cudaFree(d_valsILU0);
+  cudaFree(d_zm1);
+  cudaFree(d_zm2);
+  cudaFree(d_rm2);
 
   cusparseDestroy(cusparseHandle);
   cublasDestroy(cublasHandle);
@@ -526,17 +536,21 @@ public:
       for (int i = 0; i < n_cols; ++i) {
         const double *b_data = rhs.col(i).data();
 
-        CUDA_CHECK(cudaMemcpyAsync(d_x, sol.col(i).data(), n * sizeof(double),
-                                   cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
+                              cudaMemcpyHostToDevice));
 
-        CUDA_CHECK(cudaMemcpyAsync(d_b, b_data, n * sizeof(double),
-                                   cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_b, b_data, n * sizeof(double),
+                              cudaMemcpyHostToDevice));
 
-        solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
-                                    d_b, d_x);
+        // solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd,
+        // d_csrVal,
+        //                             d_b, d_x);
 
-        CUDA_CHECK(cudaMemcpyAsync(sol.col(i).data(), d_x, n * sizeof(double),
-                                   cudaMemcpyDeviceToHost));
+        solveUsingPreconditionedConjugateGradient(
+            n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b, d_x);
+
+        CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
+                              cudaMemcpyDeviceToHost));
       }
       return true;
 
