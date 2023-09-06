@@ -19,6 +19,202 @@
 
 // Linear solver for symmetric positive definite matrix,
 namespace SDFilter {
+
+void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
+                                               int *d_csrColInd,
+                                               float *d_csrVal, float *d_r,
+                                               float *d_x,
+                                               const float tol = 1e-5f,
+                                               const int max_iter = 10000) {
+
+  cublasHandle_t cublasHandle;
+  cusparseHandle_t cusparseHandle;
+
+  cublasCreate(&cublasHandle);
+  cusparseCreate(&cusparseHandle);
+
+  /* Description of the A matrix */
+  cusparseMatDescr_t descr = 0;
+  cusparseCreateMatDescr(&descr);
+  cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
+
+  float floatone = 1.0f, floatzero = 0.0f;
+  float alpha, beta, numerator, denominator, nalpha;
+  float r1;
+
+  float *d_p, *d_Ax, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
+
+  int k, M = 0, *I = NULL, *J = NULL;
+  int *d_col, *d_row;
+  int qatest = 0;
+  float *x, *rhs;
+  float r0;
+  float *d_val;
+  float *val = NULL;
+  float *valsILU0;
+  float rsum, diff, err = 0.0;
+  float qaerr1, qaerr2 = 0.0;
+  float dot;
+
+  //     /* Allocate required memory */
+  cudaMalloc((void **)&d_col, nz * sizeof(int));
+  cudaMalloc((void **)&d_row, (N + 1) * sizeof(int));
+  cudaMalloc((void **)&d_val, nz * sizeof(float));
+  cudaMalloc((void **)&d_y, N * sizeof(float));
+  cudaMalloc((void **)&d_p, N * sizeof(float));
+  cudaMalloc((void **)&d_omega, N * sizeof(float));
+  cudaMalloc((void **)&d_valsILU0, nz * sizeof(float));
+  cudaMalloc((void **)&d_zm1, (N) * sizeof(float));
+  cudaMalloc((void **)&d_zm2, (N) * sizeof(float));
+  cudaMalloc((void **)&d_rm2, (N) * sizeof(float));
+
+  /* Allocate required memory */
+  // cudaMalloc((void **)&d_p, N * sizeof(float));
+  // cudaMalloc((void **)&d_Ax, N * sizeof(float));
+  // cudaMalloc((void **)&d_y, N * sizeof(float));
+  // cudaMalloc((void **)&d_zm1, N * sizeof(float));
+  // cudaMalloc((void **)&d_zm2, N * sizeof(float));
+  // cudaMalloc((void **)&d_rm2, N * sizeof(float));
+  // cudaMalloc((void **)&d_omega, N * sizeof(float));
+  // cudaMalloc((void **)&d_valsILU0, nz * sizeof(float));
+
+  /* Wrap raw data into cuSPARSE generic API objects */
+  cusparseDnVecDescr_t vecp = NULL, vecX = NULL, vecY = NULL, vecR = NULL,
+                       vecZM1 = NULL;
+  cusparseCreateDnVec(&vecp, N, d_p, CUDA_R_32F);
+  cusparseCreateDnVec(&vecX, N, d_x, CUDA_R_32F);
+  cusparseCreateDnVec(&vecY, N, d_y, CUDA_R_32F);
+  cusparseCreateDnVec(&vecR, N, d_r, CUDA_R_32F);
+  cusparseCreateDnVec(&vecZM1, N, d_zm1, CUDA_R_32F);
+  cusparseDnVecDescr_t vecomega = NULL;
+  cusparseCreateDnVec(&vecomega, N, d_omega, CUDA_R_32F);
+
+  cusparseSpMatDescr_t matA = NULL;
+  cusparseSpMatDescr_t matM_lower, matM_upper;
+  cusparseFillMode_t fill_lower = CUSPARSE_FILL_MODE_LOWER;
+  cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
+  cusparseFillMode_t fill_upper = CUSPARSE_FILL_MODE_UPPER;
+  cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
+
+  /* Copy A data to ILU(0) vals as input*/
+  cudaMemcpy(d_valsILU0, d_val, nz * sizeof(float), cudaMemcpyDeviceToDevice);
+
+  // Lower Part
+  cusparseCreateCsr(&matM_lower, N, N, nz, d_row, d_col, d_valsILU0,
+                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_FILL_MODE, &fill_lower,
+                            sizeof(fill_lower));
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_DIAG_TYPE, &diag_unit,
+                            sizeof(diag_unit));
+  // M_upper
+  cusparseCreateCsr(&matM_upper, N, N, nz, d_row, d_col, d_valsILU0,
+                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_FILL_MODE, &fill_upper,
+                            sizeof(fill_upper));
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
+                            &diag_non_unit, sizeof(diag_non_unit));
+
+  /* Create ILU(0) info object */
+  int bufferSizeLU = 0;
+  size_t bufferSizeMV, bufferSizeL, bufferSizeU;
+  void *d_bufferLU, *d_bufferMV, *d_bufferL, *d_bufferU;
+  cusparseSpSVDescr_t spsvDescrL, spsvDescrU;
+  cusparseMatDescr_t matLU;
+  csrilu02Info_t infoILU = NULL;
+
+  cusparseCreateCsrilu02Info(&infoILU);
+  cusparseCreateMatDescr(&matLU);
+  cusparseSetMatType(matLU, CUSPARSE_MATRIX_TYPE_GENERAL);
+  cusparseSetMatIndexBase(matLU, CUSPARSE_INDEX_BASE_ZERO);
+
+  /* Allocate workspace for cuSPARSE */
+  cusparseSpMV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                          &floatone, matA, vecp, &floatzero, vecomega,
+                          CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSizeMV);
+  cudaMalloc(&d_bufferMV, bufferSizeMV);
+
+  cusparseScsrilu02_bufferSize(cusparseHandle, N, nz, matLU, d_val, d_row,
+                               d_col, infoILU, &bufferSizeLU);
+  cudaMalloc(&d_bufferLU, bufferSizeLU);
+
+  cusparseSpSV_createDescr(&spsvDescrL);
+  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                          &floatone, matM_lower, vecR, vecX, CUDA_R_32F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, &bufferSizeL);
+  cudaMalloc(&d_bufferL, bufferSizeL);
+
+  cusparseSpSV_createDescr(&spsvDescrU);
+  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                          &floatone, matM_upper, vecR, vecX, CUDA_R_32F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, &bufferSizeU);
+  cudaMalloc(&d_bufferU, bufferSizeU);
+
+  /* perform triangular solve analysis */
+  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &floatone, matM_lower, vecR, vecX, CUDA_R_32F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, d_bufferL);
+
+  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &floatone, matM_upper, vecR, vecX, CUDA_R_32F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, d_bufferU);
+
+  /* reset the initial guess of the solution to zero */
+
+  k = 0;
+  cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
+  // preconditioner application: d_zm1 = U^-1 L^-1 d_r
+  while (r1 > tol * tol && k <= max_iter) {
+    cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                       &floatone, matM_lower, vecR, vecY, CUDA_R_32F,
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL);
+
+    cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                       &floatone, matM_upper, vecY, vecZM1, CUDA_R_32F,
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU);
+    k++;
+
+    if (k == 1) {
+      cublasScopy(cublasHandle, N, d_zm1, 1, d_p, 1);
+    } else {
+      cublasSdot(cublasHandle, N, d_r, 1, d_zm1, 1, &numerator);
+      cublasSdot(cublasHandle, N, d_rm2, 1, d_zm2, 1, &denominator);
+      beta = numerator / denominator;
+      cublasSscal(cublasHandle, N, &beta, d_p, 1);
+      cublasSaxpy(cublasHandle, N, &floatone, d_zm1, 1, d_p, 1);
+    }
+
+    cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &floatone,
+                 matA, vecp, &floatzero, vecomega, CUDA_R_32F,
+                 CUSPARSE_SPMV_ALG_DEFAULT, d_bufferMV);
+    cublasSdot(cublasHandle, N, d_r, 1, d_zm1, 1, &numerator);
+    cublasSdot(cublasHandle, N, d_p, 1, d_omega, 1, &denominator);
+    alpha = numerator / denominator;
+    cublasSaxpy(cublasHandle, N, &alpha, d_p, 1, d_x, 1);
+    cublasScopy(cublasHandle, N, d_r, 1, d_rm2, 1);
+    cublasScopy(cublasHandle, N, d_zm1, 1, d_zm2, 1);
+    nalpha = -alpha;
+    cublasSaxpy(cublasHandle, N, &nalpha, d_omega, 1, d_r, 1);
+    cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
+  }
+  printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
+
+  // cudaFree(d_p);
+  // cudaFree(d_Ax);
+  // cudaFree(d_y);
+  // cudaFree(d_zm1);
+  // cudaFree(d_zm2);
+  // cudaFree(d_rm2);
+  // cudaFree(d_omega);
+  // cudaFree(d_valsILU0);
+
+  cusparseDestroy(cusparseHandle);
+  cublasDestroy(cublasHandle);
+}
+
 void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
                                  int *d_csrColInd, double *d_csrVal,
                                  double *d_b, double *d_x,
@@ -277,7 +473,7 @@ public:
 
       size_t size_chol = 0;
       factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
-      d_csrVal);
+                d_csrVal);
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
@@ -315,7 +511,8 @@ public:
                                    cudaMemcpyHostToDevice));
 
         solveLDLT(solverState, n, d_b, d_x);
-        // solveUsingCusolver(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b, d_x);
+        // solveUsingCusolver(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
+        // d_x);
 
         CUDA_CHECK(cudaMemcpyAsync(sol.col(i).data(), d_x, n * sizeof(double),
                                    cudaMemcpyDeviceToHost));
