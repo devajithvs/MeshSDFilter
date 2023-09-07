@@ -43,7 +43,7 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   double alpha, beta, numerator, denominator, nalpha;
   double r1;
 
-  double *d_p, *d_Ax, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
+  double *d_p, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
 
   int k;
   double dot;
@@ -249,10 +249,10 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
 
   double r0 = 0.0;
 
-  double *d_p, *d_Ax;
+  double *d_p, *d_y;
 
   cudaMalloc((void **)&d_p, N * sizeof(double));
-  cudaMalloc((void **)&d_Ax, N * sizeof(double));
+  cudaMalloc((void **)&d_y, N * sizeof(double));
 
   /* Wrap raw data into cuSPARSE generic API objects */
   cusparseSpMatDescr_t matA = NULL;
@@ -263,23 +263,23 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseCreateDnVec(&vecx, N, d_x, CUDA_R_64F);
   cusparseDnVecDescr_t vecp = NULL;
   cusparseCreateDnVec(&vecp, N, d_p, CUDA_R_64F);
-  cusparseDnVecDescr_t vecAx = NULL;
-  cusparseCreateDnVec(&vecAx, N, d_Ax, CUDA_R_64F);
+  cusparseDnVecDescr_t vecy = NULL;
+  cusparseCreateDnVec(&vecy, N, d_y, CUDA_R_64F);
 
   /* Allocate workspace for cuSPARSE */
   size_t bufferSize = 0;
   cusparseSpMV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                          &alpha, matA, vecx, &beta, vecAx, CUDA_R_64F,
+                          &alpha, matA, vecx, &beta, vecy, CUDA_R_64F,
                           CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
   void *buffer = NULL;
   cudaMalloc(&buffer, bufferSize);
 
   // Start CG algorithm
   cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
-               vecx, &beta, vecAx, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
+               vecx, &beta, vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
                buffer);
 
-  cublasDaxpy(cublasHandle, N, &alpham1, d_Ax, 1, d_b, 1);
+  cublasDaxpy(cublasHandle, N, &alpham1, d_y, 1, d_b, 1);
   blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
 
   int k = 1;
@@ -294,14 +294,14 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
     }
 
     cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
-                 vecp, &beta, vecAx, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
+                 vecp, &beta, vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
                  buffer);
-    blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_Ax, 1, &dot);
+    blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_y, 1, &dot);
     a = r1 / dot;
 
     blasStatus = cublasDaxpy(cublasHandle, N, &a, d_p, 1, d_x, 1);
     na = -a;
-    blasStatus = cublasDaxpy(cublasHandle, N, &na, d_Ax, 1, d_b, 1);
+    blasStatus = cublasDaxpy(cublasHandle, N, &na, d_y, 1, d_b, 1);
 
     r0 = r1;
     blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
@@ -316,8 +316,8 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   if (vecx) {
     cusparseDestroyDnVec(vecx);
   }
-  if (vecAx) {
-    cusparseDestroyDnVec(vecAx);
+  if (vecy) {
+    cusparseDestroyDnVec(vecy);
   }
   if (vecp) {
     cusparseDestroyDnVec(vecp);
@@ -327,7 +327,7 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseDestroy(cusparseHandle);
   cublasDestroy(cublasHandle);
   cudaFree(d_p);
-  cudaFree(d_Ax);
+  cudaFree(d_y);
 }
 
 struct CuSolverState {
