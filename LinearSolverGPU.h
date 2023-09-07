@@ -39,20 +39,13 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
   cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 
-  double doubleone = 1.0f, doublezero = 0.0f;
+  double doubleone = 1.0, doublezero = 0.0;
   double alpha, beta, numerator, denominator, nalpha;
   double r1;
 
   double *d_p, *d_Ax, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
 
-  int k, M = 0, *I = NULL, *J = NULL;
-  int qatest = 0;
-  double *x, *rhs;
-  double r0;
-  double *val = NULL;
-  double *valsILU0;
-  double rsum, diff, err = 0.0;
-  double qaerr1, qaerr2 = 0.0;
+  int k;
   double dot;
 
   //     /* Allocate required memory */
@@ -72,6 +65,7 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseCreateDnVec(&vecY, N, d_y, CUDA_R_64F);
   cusparseCreateDnVec(&vecR, N, d_r, CUDA_R_64F);
   cusparseCreateDnVec(&vecZM1, N, d_zm1, CUDA_R_64F);
+
   cusparseDnVecDescr_t vecomega = NULL;
   cusparseCreateDnVec(&vecomega, N, d_omega, CUDA_R_64F);
 
@@ -144,6 +138,16 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
                           CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, &bufferSizeU);
   cudaMalloc(&d_bufferU, bufferSizeU);
 
+  /* Perform analysis for ILU(0) */
+  cusparseDcsrilu02_analysis(cusparseHandle, N, nz, descr, d_valsILU0,
+                             d_csrRowPtr, d_csrColInd, infoILU,
+                             CUSPARSE_SOLVE_POLICY_USE_LEVEL, d_bufferLU);
+
+  /* generate the ILU(0) factors */
+  cusparseDcsrilu02(cusparseHandle, N, nz, matLU, d_valsILU0, d_csrRowPtr,
+                    d_csrColInd, infoILU, CUSPARSE_SOLVE_POLICY_USE_LEVEL,
+                    d_bufferLU);
+
   /* perform triangular solve analysis */
   cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                         &doubleone, matM_lower, vecR, vecX, CUDA_R_64F,
@@ -188,8 +192,8 @@ void solveUsingPreconditionedConjugateGradient(int N, int nz, int *d_csrRowPtr,
     nalpha = -alpha;
     cublasDaxpy(cublasHandle, N, &nalpha, d_omega, 1, d_r, 1);
     cublasDdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
-    printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
   }
+  printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
 
   if (matA) {
     cusparseDestroySpMat(matA);
@@ -302,9 +306,9 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
     r0 = r1;
     blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
     cudaDeviceSynchronize();
-    // printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
     k++;
   }
+  printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
 
   if (matA) {
     cusparseDestroySpMat(matA);
@@ -536,8 +540,10 @@ public:
       for (int i = 0; i < n_cols; ++i) {
         const double *b_data = rhs.col(i).data();
 
-        CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
-                              cudaMemcpyHostToDevice));
+        cudaMemset(d_x, 0, n * sizeof(double));
+
+        // CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
+        //                       cudaMemcpyHostToDevice));
 
         CUDA_CHECK(cudaMemcpy(d_b, b_data, n * sizeof(double),
                               cudaMemcpyHostToDevice));
