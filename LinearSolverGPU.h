@@ -508,6 +508,25 @@ public:
                             cudaMemcpyHostToDevice));
 
       return true;
+    } else if (solver_type_ == Parameters::PRECG) {
+
+      n = M.rows();
+      nnz = M.nonZeros();
+
+      CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
+      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
+      CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
+      CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
+      CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
+
+      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
+                            cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
+                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
+                            cudaMemcpyHostToDevice));
+
+      return true;
     } else {
       return false;
     }
@@ -538,19 +557,32 @@ public:
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
-        const double *b_data = rhs.col(i).data();
+        CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
+                              cudaMemcpyHostToDevice));
 
+        CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(double),
+                              cudaMemcpyHostToDevice));
+
+        solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
+                                    d_b, d_x);
+
+        CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+      }
+      return true;
+
+    } else if (solver_type_ == Parameters::PRECG) {
+
+      int n_cols = rhs.cols();
+
+      for (int i = 0; i < n_cols; ++i) {
         cudaMemset(d_x, 0, n * sizeof(double));
 
         // CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
         //                       cudaMemcpyHostToDevice));
 
-        CUDA_CHECK(cudaMemcpy(d_b, b_data, n * sizeof(double),
+        CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(double),
                               cudaMemcpyHostToDevice));
-
-        // solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd,
-        // d_csrVal,
-        //                             d_b, d_x);
 
         solveUsingPreconditionedConjugateGradient(
             n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b, d_x);
