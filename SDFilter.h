@@ -314,7 +314,7 @@ public:
 
   virtual ~Parameters() {}
 
-  enum LinearSolverType { PRECG, CG, LDLT };
+  enum LinearSolverType { CGChol, CGBig, CG, LDLT };
 
   double lambda; // Regularization weight
   double eta; // Gaussian standard deviation for spatial weight, relative to the
