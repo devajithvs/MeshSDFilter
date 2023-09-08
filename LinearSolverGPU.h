@@ -23,6 +23,9 @@ namespace SDFilter {
 struct PreConjugateState {
   cublasHandle_t cublasHandle;
   cusparseHandle_t cusparseHandle;
+  cusolverSpHandle_t cusolverHandle;
+
+  csrcholInfo_t choleskyInfo;
 
   cusparseMatDescr_t descr = 0;
   cusparseSpMatDescr_t matA = NULL;
@@ -31,7 +34,8 @@ struct PreConjugateState {
 
   double *d_p, *d_y, *d_zm1, *d_zm2, *d_rm2, *d_omega, *d_valsILU0;
 
-  int bufferSizeLU = 0;
+  size_t bufferSizeLU = 0;
+  // int bufferSizeLU = 0;
   size_t bufferSizeMV, bufferSizeL, bufferSizeU;
   void *d_bufferLU, *d_bufferMV, *d_bufferL, *d_bufferU;
   cusparseSpSVDescr_t spsvDescrL, spsvDescrU;
@@ -99,10 +103,10 @@ void initializePreConjugateState(int N, int nz, int *d_csrRowPtr,
       CUSPARSE_SPMV_ALG_DEFAULT, &state.bufferSizeMV);
   cudaMalloc(&state.d_bufferMV, state.bufferSizeMV);
 
-  cusparseDcsrilu02_bufferSize(state.cusparseHandle, N, nz, state.matLU,
-                               d_csrVal, d_csrRowPtr, d_csrColInd,
-                               state.infoILU, &state.bufferSizeLU);
-  cudaMalloc(&state.d_bufferLU, state.bufferSizeLU);
+  // cusparseDcsrilu02_bufferSize(state.cusparseHandle, N, nz, state.matLU,
+  //                              d_csrVal, d_csrRowPtr, d_csrColInd,
+  //                              state.infoILU, &state.bufferSizeLU);
+  // cudaMalloc(&state.d_bufferLU, state.bufferSizeLU);
 
   cudaMemcpy(state.d_valsILU0, d_csrVal, nz * sizeof(double),
              cudaMemcpyDeviceToDevice);
@@ -133,16 +137,31 @@ void generateILUFactors(PreConjugateState &state, int N, int nz,
   cudaMemcpy(state.d_valsILU0, d_csrVal, nz * sizeof(double),
              cudaMemcpyDeviceToDevice);
 
-  /* Perform analysis for ILU(0) */
-  cusparseDcsrilu02_analysis(state.cusparseHandle, N, nz, state.descr,
-                             state.d_valsILU0, d_csrRowPtr, d_csrColInd,
-                             state.infoILU, CUSPARSE_SOLVE_POLICY_USE_LEVEL,
-                             state.d_bufferLU);
+  // /* Perform analysis for ILU(0) */
+  // cusparseDcsrilu02_analysis(state.cusparseHandle, N, nz, state.descr,
+  //                            state.d_valsILU0, d_csrRowPtr, d_csrColInd,
+  //                            state.infoILU, CUSPARSE_SOLVE_POLICY_USE_LEVEL,
+  //                            state.d_bufferLU);
 
-  /* generate the ILU(0) factors */
-  cusparseDcsrilu02(state.cusparseHandle, N, nz, state.matLU, state.d_valsILU0,
-                    d_csrRowPtr, d_csrColInd, state.infoILU,
-                    CUSPARSE_SOLVE_POLICY_USE_LEVEL, state.d_bufferLU);
+  // /* generate the ILU(0) factors */
+  // cusparseDcsrilu02(state.cusparseHandle, N, nz, state.matLU,
+  // state.d_valsILU0,
+  //                   d_csrRowPtr, d_csrColInd, state.infoILU,
+  //                   CUSPARSE_SOLVE_POLICY_USE_LEVEL, state.d_bufferLU);
+
+  cusolverSpXcsrcholAnalysis(state.cusolverHandle, N, nz, state.matLU,
+                             d_csrRowPtr, d_csrColInd, state.choleskyInfo);
+  // Compute workspace size
+  size_t size_internal = 0;
+  cusolverSpDcsrcholBufferInfo(
+      state.cusolverHandle, N, nz, state.matLU, state.d_valsILU0, d_csrRowPtr,
+      d_csrColInd, state.choleskyInfo, &size_internal, &state.bufferSizeLU);
+
+  // Allocate workspace on GPU
+  cudaMalloc(&state.d_bufferLU, state.bufferSizeLU);
+  cusolverSpDcsrcholFactor(state.cusolverHandle, N, nz, state.matLU,
+                           state.d_valsILU0, d_csrRowPtr, d_csrColInd,
+                           state.choleskyInfo, &state.bufferSizeLU);
 
   cusparseCreateDnVec(&state.vecX, N, d_x, CUDA_R_64F);
   cusparseCreateDnVec(&state.vecR, N, d_r, CUDA_R_64F);
