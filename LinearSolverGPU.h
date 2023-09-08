@@ -49,6 +49,9 @@ struct PreConjugateState {
   /* Wrap raw data into cuSPARSE generic API objects */
   cusparseDnVecDescr_t vecp = NULL, vecY = NULL, vecZM1 = NULL;
   cusparseDnVecDescr_t vecomega = NULL;
+
+  /* Wrap raw data into cuSPARSE generic API objects */
+  cusparseDnVecDescr_t vecX = NULL, vecR = NULL;
 };
 
 // Function to initialize ConjugateState and perform factorization
@@ -123,10 +126,9 @@ void initializePreConjugateState(int N, int nz, int *d_csrRowPtr,
                             &state.diag_non_unit, sizeof(state.diag_non_unit));
 }
 
-void solveUsingPreconditionedConjugateGradient(
-    PreConjugateState &state, int N, int nz, int *d_csrRowPtr, int *d_csrColInd,
-    double *d_csrVal, double *d_r, double *d_x, const double tol = 1e-5f,
-    const int max_iter = 10000) {
+void generateILUFactors(PreConjugateState &state, int N, int nz,
+                        int *d_csrRowPtr, int *d_csrColInd, double *d_csrVal,
+                        double *d_r, double *d_x) {
 
   cudaMemcpy(state.d_valsILU0, d_csrVal, nz * sizeof(double),
              cudaMemcpyDeviceToDevice);
@@ -142,6 +144,41 @@ void solveUsingPreconditionedConjugateGradient(
                     d_csrRowPtr, d_csrColInd, state.infoILU,
                     CUSPARSE_SOLVE_POLICY_USE_LEVEL, state.d_bufferLU);
 
+  cusparseCreateDnVec(&state.vecX, N, d_x, CUDA_R_64F);
+  cusparseCreateDnVec(&state.vecR, N, d_r, CUDA_R_64F);
+
+  /* Allocate workspace for cuSPARSE */
+  cusparseSpSV_createDescr(&state.spsvDescrL);
+  cusparseSpSV_bufferSize(
+      state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &state.doubleone,
+      state.matM_lower, state.vecR, state.vecX, CUDA_R_64F,
+      CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL, &state.bufferSizeL);
+  cudaMalloc(&state.d_bufferL, state.bufferSizeL);
+
+  cusparseSpSV_createDescr(&state.spsvDescrU);
+  cusparseSpSV_bufferSize(
+      state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &state.doubleone,
+      state.matM_upper, state.vecR, state.vecX, CUDA_R_64F,
+      CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrU, &state.bufferSizeU);
+  cudaMalloc(&state.d_bufferU, state.bufferSizeU);
+
+  /* perform triangular solve analysis */
+  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &state.doubleone, state.matM_lower, state.vecR,
+                        state.vecX, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT,
+                        state.spsvDescrL, state.d_bufferL);
+
+  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &state.doubleone, state.matM_upper, state.vecR,
+                        state.vecX, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT,
+                        state.spsvDescrU, state.d_bufferU);
+}
+
+void solveUsingPreconditionedConjugateGradient(
+    PreConjugateState &state, int N, int nz, int *d_csrRowPtr, int *d_csrColInd,
+    double *d_csrVal, double *d_r, double *d_x, const double tol = 1e-5f,
+    const int max_iter = 10000) {
+
   cublasHandle_t cublasHandle;
   cusparseHandle_t cusparseHandle;
 
@@ -155,44 +192,14 @@ void solveUsingPreconditionedConjugateGradient(
   int k;
   double dot;
 
-  /* Wrap raw data into cuSPARSE generic API objects */
-  cusparseDnVecDescr_t vecX = NULL, vecR = NULL;
-  cusparseCreateDnVec(&vecX, N, d_x, CUDA_R_64F);
-  cusparseCreateDnVec(&vecR, N, d_r, CUDA_R_64F);
-
-  /* Allocate workspace for cuSPARSE */
-  cusparseSpSV_createDescr(&state.spsvDescrL);
-  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                          &state.doubleone, state.matM_lower, vecR, vecX,
-                          CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT,
-                          state.spsvDescrL, &state.bufferSizeL);
-  cudaMalloc(&state.d_bufferL, state.bufferSizeL);
-
-  cusparseSpSV_createDescr(&state.spsvDescrU);
-  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                          &state.doubleone, state.matM_upper, vecR, vecX,
-                          CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT,
-                          state.spsvDescrU, &state.bufferSizeU);
-  cudaMalloc(&state.d_bufferU, state.bufferSizeU);
-
-  /* perform triangular solve analysis */
-  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &state.doubleone, state.matM_lower, vecR, vecX,
-                        CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL,
-                        state.d_bufferL);
-
-  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &state.doubleone, state.matM_upper, vecR, vecX,
-                        CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrU,
-                        state.d_bufferU);
-
   k = 0;
   cublasDdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
   // preconditioner application: state.d_zm1 = U^-1 L^-1 d_r
   while (r1 > tol * tol && k <= max_iter) {
     cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                       &state.doubleone, state.matM_lower, vecR, state.vecY,
-                       CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL);
+                       &state.doubleone, state.matM_lower, state.vecR,
+                       state.vecY, CUDA_R_64F, CUSPARSE_SPSV_ALG_DEFAULT,
+                       state.spsvDescrL);
 
     cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                        &state.doubleone, state.matM_upper, state.vecY,
@@ -233,14 +240,14 @@ void solveUsingPreconditionedConjugateGradient(
   // if (state.vecp) {
   //   cusparseDestroyDnVec(state.vecp);
   // }
-  // if (vecX) {
-  //   cusparseDestroyDnVec(vecX);
+  // if (state.vecX) {
+  //   cusparseDestroyDnVec(state.vecX);
   // }
   // if (state.vecY) {
   //   cusparseDestroyDnVec(state.vecY);
   // }
-  // if (vecR) {
-  //   cusparseDestroyDnVec(vecR);
+  // if (state.vecR) {
+  //   cusparseDestroyDnVec(state.vecR);
   // }
   // if (state.vecZM1) {
   //   cusparseDestroyDnVec(state.vecZM1);
@@ -550,6 +557,7 @@ public:
       CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
       CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
       CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
+      cudaMemset(d_x, 0, n * sizeof(double));
 
       // Initialize the ConjugateState struct and perform factorization
       initializePreConjugateState(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
@@ -561,6 +569,9 @@ public:
                             (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
       CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
+
+      generateILUFactors(preConjugatestate, n, nnz, d_csrRowPtr, d_csrColInd,
+                         d_csrVal, d_b, d_x);
 
       return true;
     } else {
@@ -618,6 +629,10 @@ public:
                               cudaMemcpyHostToDevice));
 
         // Call the PCG solver function with the precomputed factorization
+        // generateILUFactors(preConjugatestate, n, nnz, d_csrRowPtr,
+        // d_csrColInd,
+        //                    d_csrVal, d_b, d_x);
+
         solveUsingPreconditionedConjugateGradient(preConjugatestate, n, nnz,
                                                   d_csrRowPtr, d_csrColInd,
                                                   d_csrVal, d_b, d_x);
