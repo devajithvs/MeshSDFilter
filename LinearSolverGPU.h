@@ -270,7 +270,8 @@ void solveUsingPreconditionedConjugateGradient(
 
 void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
                                  int *d_csrColInd, double *d_csrVal,
-                                 double *d_b, double *d_x,
+                                 double *d_b, double *d_x, int *d_csrRowPtrL,
+                                 int *d_csrColIndL, double *d_csrValL,
                                  const double tol = 1e-5f,
                                  const int max_iter = 10000) {
 
@@ -281,12 +282,12 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cublasStatus_t blasStatus;
   cusparseCreate(&cusparseHandle);
 
-  double a, b, na, r1, dot;
+  double a, b, na, rho, temp;
   double alpha = 1.0;
   double alpham1 = -1.0;
   double beta = 0.0;
 
-  double r0 = 0.0;
+  double rhop = 0.0;
 
   double *d_p, *d_y;
 
@@ -305,6 +306,61 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
   cusparseDnVecDescr_t vecy = NULL;
   cusparseCreateDnVec(&vecy, N, d_y, CUDA_R_64F);
 
+  cusparseDnVecDescr_t vecR = NULL;
+  cusparseCreateDnVec(&vecR, N, d_b, CUDA_R_64F);
+
+  cusparseSpMatDescr_t matM_upper;
+  cusparseSpMatDescr_t matM_lower;
+
+  cusparseFillMode_t fill_lower = CUSPARSE_FILL_MODE_LOWER;
+  cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
+  cusparseFillMode_t fill_upper = CUSPARSE_FILL_MODE_UPPER;
+  cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
+
+  // Lower Part
+  cusparseCreateCsr(&matM_lower, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_FILL_MODE, &fill_lower,
+                            sizeof(fill_lower));
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_DIAG_TYPE, &diag_unit,
+                            sizeof(diag_unit));
+
+  // M_upper
+  cusparseCreateCsr(&matM_upper, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_FILL_MODE, &fill_upper,
+                            sizeof(fill_upper));
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
+                            &diag_non_unit, sizeof(diag_non_unit));
+
+  void *d_bufferL, *d_bufferU;
+  size_t bufferSizeL, bufferSizeU;
+  cusparseSpSVDescr_t spsvDescrL, spsvDescrU;
+
+  /* Allocate workspace for cuSPARSE */
+  cusparseSpSV_createDescr(&spsvDescrL);
+  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                          &alpha, matM_lower, vecR, vecx, CUDA_R_64F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, &bufferSizeL);
+  cudaMalloc(&d_bufferL, bufferSizeL);
+
+  cusparseSpSV_createDescr(&spsvDescrU);
+  cusparseSpSV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                          &alpha, matM_upper, vecR, vecx, CUDA_R_64F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, &bufferSizeU);
+  cudaMalloc(&d_bufferU, bufferSizeU);
+
+  /* perform triangular solve analysis */
+  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &alpha, matM_lower, vecR, vecx, CUDA_R_64F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, d_bufferL);
+
+  cusparseSpSV_analysis(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &alpha, matM_upper, vecR, vecx, CUDA_R_64F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, d_bufferU);
+
   /* Allocate workspace for cuSPARSE */
   size_t bufferSize = 0;
   cusparseSpMV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
@@ -319,35 +375,55 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
                buffer);
 
   cublasDaxpy(cublasHandle, N, &alpham1, d_y, 1, d_b, 1);
-  blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
+  blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &rho);
 
-  int k = 1;
+  int k = 0;
+  cusparseDnVecDescr_t vecZ = NULL;
+  double *d_z;
+  cudaMalloc((void **)&d_z, (N) * sizeof(double));
+  cusparseCreateDnVec(&vecZ, N, d_z, CUDA_R_64F);
 
-  while (r1 > tol * tol && k <= max_iter) {
-    if (k > 1) {
-      b = r1 / r0;
-      blasStatus = cublasDscal(cublasHandle, N, &b, d_p, 1);
-      blasStatus = cublasDaxpy(cublasHandle, N, &alpha, d_b, 1, d_p, 1);
+  cusparseDnVecDescr_t vect = NULL;
+  double *d_t;
+  cudaMalloc((void **)&d_t, (N) * sizeof(double));
+  cusparseCreateDnVec(&vect, N, d_t, CUDA_R_64F);
+
+  while (rho > tol * tol && k < max_iter) {
+
+    cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+                       matM_lower, vecR, vect, CUDA_R_64F,
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL);
+
+    cusparseSpSV_solve(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+                       matM_upper, vect, vecZ, CUDA_R_64F,
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU);
+
+    rhop = rho;
+    blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_z, 1, &rho);
+
+    if (k == 0) {
+      blasStatus = cublasDcopy(cublasHandle, N, d_z, 1, d_p, 1);
     } else {
-      blasStatus = cublasDcopy(cublasHandle, N, d_b, 1, d_p, 1);
+      b = rho / rhop;
+      blasStatus = cublasDscal(cublasHandle, N, &b, d_p, 1);
+      blasStatus = cublasDaxpy(cublasHandle, N, &alpha, d_z, 1, d_p, 1);
+      cublasDcopy(cublasHandle, N, d_z, 1, d_p, 1);
     }
 
     cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
                  vecp, &beta, vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
                  buffer);
-    blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_y, 1, &dot);
-    a = r1 / dot;
+    blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_y, 1, &temp);
+    a = rho / temp;
 
     blasStatus = cublasDaxpy(cublasHandle, N, &a, d_p, 1, d_x, 1);
     na = -a;
     blasStatus = cublasDaxpy(cublasHandle, N, &na, d_y, 1, d_b, 1);
 
-    r0 = r1;
-    blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
     cudaDeviceSynchronize();
     k++;
   }
-  printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+  printf("iteration = %3d, residual = %e\n", k, sqrt(rho));
 
   if (matA) {
     cusparseDestroySpMat(matA);
@@ -546,6 +622,27 @@ public:
       CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
 
+      // Create an IncompleteCholesky factorization object
+      Eigen::IncompleteCholesky<double> ichol(M);
+
+      // Perform the incomplete Cholesky factorization
+      ichol.compute(M);
+      Eigen::SparseMatrix<double> symbolicL = ichol.matrixL();
+      double *valuePtrL = symbolicL.valuePtr();
+      int *csrRowPtrL = symbolicL.outerIndexPtr();
+      int *csrColIndL = symbolicL.innerIndexPtr();
+
+      CUDA_CHECK(cudaMalloc((void **)&d_csrValL, nnz * sizeof(double)));
+      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtrL, (n + 1) * sizeof(int)));
+      CUDA_CHECK(cudaMalloc((void **)&d_csrColIndL, nnz * sizeof(int)));
+
+      CUDA_CHECK(cudaMemcpy(d_csrValL, valuePtrL, nnz * sizeof(double),
+                            cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(d_csrRowPtrL, csrRowPtrL, (n + 1) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(d_csrColIndL, csrColIndL, nnz * sizeof(int),
+                            cudaMemcpyHostToDevice));
+
       return true;
     } else if (solver_type_ == Parameters::PRECG) {
 
@@ -611,7 +708,8 @@ public:
                               cudaMemcpyHostToDevice));
 
         solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
-                                    d_b, d_x);
+                                    d_b, d_x, d_csrRowPtrL, d_csrColIndL,
+                                    d_csrValL);
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
@@ -672,6 +770,9 @@ private:
   int n, nnz;
   double *d_csrVal, *d_b, *d_x;
   int *d_csrRowPtr, *d_csrColInd;
+
+  double *d_csrValL;
+  int *d_csrRowPtrL, *d_csrColIndL;
 };
 
 class LinearSolverCPU {
