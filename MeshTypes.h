@@ -40,10 +40,10 @@
 
 /// Default traits for triangle mesh
 struct TriTraits : public OpenMesh::DefaultTraits {
-  /// Use double precision points
-  typedef OpenMesh::Vec3d Point;
-  /// Use double precision Normals
-  typedef OpenMesh::Vec3d Normal;
+  /// Use float precision points
+  typedef OpenMesh::Vec3f Point;
+  /// Use float precision Normals
+  typedef OpenMesh::Vec3f Normal;
 
   /// Use RGBA Color
   typedef OpenMesh::Vec4f Color;
@@ -73,13 +73,13 @@ void set_vertex_points(MeshT &mesh, const Matrix3X &pos) {
 
   for (typename MeshT::ConstVertexIter cv_it = mesh.vertices_begin();
        cv_it != mesh.vertices_end(); ++cv_it) {
-    Eigen::Vector3d pt = pos.col(cv_it->idx());
+    Eigen::Vector3f pt = pos.col(cv_it->idx());
     mesh.set_point(*cv_it, from_eigen_vec3d<typename MeshT::Point>(pt));
   }
 }
 
 template <typename MeshT>
-void get_vertex_points(const MeshT &mesh, std::vector<double> &points) {
+void get_vertex_points(const MeshT &mesh, std::vector<float> &points) {
   points.assign(3 * mesh.n_vertices(), 0.0);
   for (typename MeshT::ConstVertexIter cv_it = mesh.vertices_begin();
        cv_it != mesh.vertices_end(); ++cv_it) {
@@ -110,7 +110,7 @@ void get_face_vertex_indices(const TriMesh &mesh,
 }
 
 template <typename MeshT>
-void set_vertex_points(MeshT &mesh, const std::vector<double> &pos) {
+void set_vertex_points(MeshT &mesh, const std::vector<float> &pos) {
   assert(mesh.n_vertices() * 3 == pos.size());
 
   for (typename MeshT::ConstVertexIter cv_it = mesh.vertices_begin();
@@ -130,19 +130,19 @@ inline bool write_mesh_high_accuracy(const MeshT &mesh,
 }
 
 template <typename MeshT>
-inline Eigen::Vector3d bbox_dimension(const MeshT &mesh) {
+inline Eigen::Vector3f bbox_dimension(const MeshT &mesh) {
   Matrix3X vtx_pos;
   get_vertex_points(mesh, vtx_pos);
 
   return vtx_pos.rowwise().maxCoeff() - vtx_pos.rowwise().minCoeff();
 }
 
-template <typename MeshT> inline double bbox_diag_length(const MeshT &mesh) {
+template <typename MeshT> inline float bbox_diag_length(const MeshT &mesh) {
   return bbox_dimension(mesh).norm();
 }
 
 template <typename MeshT>
-inline Eigen::Vector3d mesh_center(const MeshT &mesh) {
+inline Eigen::Vector3f mesh_center(const MeshT &mesh) {
   Matrix3X vtx_pos;
   get_vertex_points(mesh, vtx_pos);
 
@@ -150,7 +150,7 @@ inline Eigen::Vector3d mesh_center(const MeshT &mesh) {
 }
 
 template <typename MeshT>
-inline double average_neighbor_face_centroid_dist(const MeshT &mesh) {
+inline float average_neighbor_face_centroid_dist(const MeshT &mesh) {
   Matrix3X centroid_pos(3, mesh.n_faces());
   for (typename MeshT::ConstFaceIter cf_it = mesh.faces_begin();
        cf_it != mesh.faces_end(); ++cf_it) {
@@ -158,7 +158,7 @@ inline double average_neighbor_face_centroid_dist(const MeshT &mesh) {
         to_eigen_vec3d(mesh.calc_face_centroid(*cf_it));
   }
 
-  double centroid_dist = 0;
+  float centroid_dist = 0;
   int n = 0;
   for (typename MeshT::ConstEdgeIter ce_it = mesh.edges_begin();
        ce_it != mesh.edges_end(); ++ce_it) {
@@ -174,12 +174,12 @@ inline double average_neighbor_face_centroid_dist(const MeshT &mesh) {
   return centroid_dist / n;
 }
 
-template <typename MeshT> inline double average_edge_length(const MeshT &mesh) {
+template <typename MeshT> inline float average_edge_length(const MeshT &mesh) {
   if (static_cast<int>(mesh.n_edges()) == 0) {
     return 0.0;
   }
 
-  double length = 0;
+  float length = 0;
 
   for (typename MeshT::ConstEdgeIter ce_it = mesh.edges_begin();
        ce_it != mesh.edges_end(); ++ce_it) {
@@ -192,8 +192,8 @@ template <typename MeshT> inline double average_edge_length(const MeshT &mesh) {
 // Center the mesh at the origin, and normalize its scale
 // Return the orginal mesh center, and the orginal scale
 template <typename MeshT>
-inline void normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center,
-                           double &original_scale) {
+inline void normalize_mesh(MeshT &mesh, Eigen::Vector3f &original_center,
+                           float &original_scale) {
   original_center = mesh_center(mesh);
   original_scale = bbox_diag_length(mesh);
 
@@ -209,12 +209,12 @@ inline void normalize_mesh(MeshT &mesh, Eigen::Vector3d &original_center,
 // Scale and move a normalized mesh to according to its original scale and
 // center
 template <typename MeshT>
-inline void restore_mesh(MeshT &mesh, const Eigen::Vector3d &original_center,
-                         double original_scale) {
+inline void restore_mesh(MeshT &mesh, const Eigen::Vector3f &original_center,
+                         float original_scale) {
   Matrix3X vtx_pos;
   get_vertex_points(mesh, vtx_pos);
 
-  Eigen::Vector3d center = vtx_pos.rowwise().mean();
+  Eigen::Vector3f center = vtx_pos.rowwise().mean();
   vtx_pos.colwise() -= center;
 
   vtx_pos *= original_scale;

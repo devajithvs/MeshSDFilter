@@ -41,25 +41,25 @@ namespace SDFilter {
 typedef long int size_s;
 
 // Define eigen matrix types
-typedef Eigen::Matrix<double, 3, Eigen::Dynamic> Matrix3X;
-typedef Eigen::Matrix<double, 2, Eigen::Dynamic> Matrix2X;
+typedef Eigen::Matrix<float, 3, Eigen::Dynamic> Matrix3X;
+typedef Eigen::Matrix<float, 2, Eigen::Dynamic> Matrix2X;
 typedef Eigen::Matrix<int, 2, Eigen::Dynamic> Matrix2Xi;
-typedef Eigen::Matrix<double, Eigen::Dynamic, 3> MatrixX3;
-typedef Eigen::Matrix<double, Eigen::Dynamic, 2> MatrixX2;
+typedef Eigen::Matrix<float, Eigen::Dynamic, 3> MatrixX3;
+typedef Eigen::Matrix<float, Eigen::Dynamic, 2> MatrixX2;
 typedef Eigen::Matrix<int, 3, Eigen::Dynamic> Matrix3Xi;
 typedef Eigen::Matrix<Eigen::Index, 2, Eigen::Dynamic> Matrix2XIdx;
 typedef Eigen::Matrix<Eigen::Index, Eigen::Dynamic, 1> VectorXIdx;
-typedef Eigen::SparseMatrix<double> SparseMatrixXd;
-typedef Eigen::Triplet<double> Triplet;
+typedef Eigen::SparseMatrix<float> SparseMatrixXf;
+typedef Eigen::Triplet<float> Triplet;
 
-// Conversion between a 3d vector type to Eigen::Vector3d
+// Conversion between a 3d vector type to Eigen::Vector3f
 template <typename Vec_T>
-inline Eigen::Vector3d to_eigen_vec3d(const Vec_T &vec) {
-  return Eigen::Vector3d(vec[0], vec[1], vec[2]);
+inline Eigen::Vector3f to_eigen_vec3d(const Vec_T &vec) {
+  return Eigen::Vector3f(vec[0], vec[1], vec[2]);
 }
 
 template <typename Vec_T>
-inline Vec_T from_eigen_vec3d(const Eigen::Vector3d &vec) {
+inline Vec_T from_eigen_vec3d(const Eigen::Vector3f &vec) {
   Vec_T v;
   v[0] = vec(0);
   v[1] = vec(1);

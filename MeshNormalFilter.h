@@ -47,7 +47,7 @@ public:
         mesh_update_closeness_weight(0.001), mesh_update_iter(20) {
     // Use an threshold value corresponding to eps_angle_degree degrees change
     // of normal vectors between two iterations
-    double eps_angle_degree = 0.2;
+    float eps_angle_degree = 0.2;
     avg_disp_eps = 2 * std::sin(eps_angle_degree * 0.5 * M_PI / 180);
   }
 
@@ -61,8 +61,8 @@ public:
 
   MeshUpdateMethod mesh_update_method;
 
-  double mesh_update_closeness_weight; // Weight for the closeness term in mesh
-                                       // update
+  float mesh_update_closeness_weight; // Weight for the closeness term in mesh
+                                      // update
 
   int mesh_update_iter; // Number of mesh update iterations
 
@@ -105,7 +105,7 @@ class MeshNormalFilter : public SDFilter {
 public:
   MeshNormalFilter(const TriMesh &mesh)
       : mesh_(mesh), print_error_evaluation_(false),
-        linear_solver_(Parameters::CGChol), system_matrix_factorized_(false) {}
+        linear_solver_(Parameters::CG), system_matrix_factorized_(false) {}
 
   virtual ~MeshNormalFilter() {}
 
@@ -170,9 +170,9 @@ protected:
 
   bool get_neighborhood(const Parameters &param,
                         Eigen::Matrix2Xi &neighbor_pairs,
-                        Eigen::VectorXd &neighbor_dist) {
+                        Eigen::VectorXf &neighbor_dist) {
     // Neighborhood radius set to three times of eta
-    double radius = 3.0 * param.eta;
+    float radius = 3.0 * param.eta;
     int n_faces = mesh_.n_faces();
     int n_vtx = mesh_.n_vertices();
 
@@ -198,7 +198,7 @@ protected:
         face_visited[i] = true;
         face_queue.push(i);
 
-        Eigen::Vector3d center_face_centroid = face_centroids.col(i);
+        Eigen::Vector3f center_face_centroid = face_centroids.col(i);
 
         while (!face_queue.empty()) {
           TriMesh::FaceHandle fh(face_queue.front());
@@ -221,7 +221,7 @@ protected:
                 if (!face_visited[current_face]) {
                   face_visited[current_face] = true;
 
-                  double dist =
+                  float dist =
                       (face_centroids.col(current_face) - center_face_centroid)
                           .norm();
 
@@ -335,14 +335,14 @@ protected:
     return n_neighbor_pairs > Eigen::Index(0);
   }
 
-  void get_initial_data(Eigen::MatrixXd &guidance,
-                        Eigen::MatrixXd &init_signals,
-                        Eigen::VectorXd &area_weights) {
+  void get_initial_data(Eigen::MatrixXf &guidance,
+                        Eigen::MatrixXf &init_signals,
+                        Eigen::VectorXf &area_weights) {
     init_signals.resize(3, mesh_.n_faces());
 
     for (TriMesh::ConstFaceIter cf_it = mesh_.faces_begin();
          cf_it != mesh_.faces_end(); ++cf_it) {
-      Eigen::Vector3d f_normal =
+      Eigen::Vector3f f_normal =
           to_eigen_vec3d(mesh_.calc_face_normal(*cf_it)).normalized();
       init_signals.col(cf_it->idx()) = f_normal;
     }
@@ -374,15 +374,15 @@ private:
 
   // LinearSolverCPU linear_solver_;
   LinearSolverGPU linear_solver_;
-  SparseMatrixXd At_; // Transpose of part of the linear least squares matrix
+  SparseMatrixXf At_; // Transpose of part of the linear least squares matrix
                       // that corresponds to mean centering of face vertices
   bool system_matrix_factorized_; // Whether the matrix
 
-  SparseMatrixXd M;
+  SparseMatrixXf M;
 
   // Set up and pre-factorize the linear system for iterative mesh update
   bool setup_mesh_udpate_system(const Matrix3Xi &face_vtx_idx,
-                                double w_closeness) {
+                                float w_closeness) {
     if (system_matrix_factorized_) {
       return true;
     }
@@ -393,7 +393,7 @@ private:
     std::vector<Triplet> I_triplets(n_vtx);
 
     // Matrix for mean centering of three vertices
-    Eigen::Matrix3d mean_centering_mat;
+    Eigen::Matrix3f mean_centering_mat;
     get_mean_centering_matrix(mean_centering_mat);
 
     OMP_PARALLEL {
@@ -419,12 +419,12 @@ private:
       }
     }
 
-    SparseMatrixXd A(3 * n_faces, n_vtx);
+    SparseMatrixXf A(3 * n_faces, n_vtx);
     A.setFromTriplets(A_triplets.begin(), A_triplets.end());
     At_ = A.transpose();
     At_.makeCompressed();
 
-    SparseMatrixXd wI(n_vtx, n_vtx);
+    SparseMatrixXf wI(n_vtx, n_vtx);
     wI.setFromTriplets(I_triplets.begin(), I_triplets.end());
     M = At_ * A + wI;
 
@@ -435,7 +435,7 @@ private:
   }
 
   void get_face_area_weights(const TriMesh &mesh,
-                             Eigen::VectorXd &face_area_weights) const {
+                             Eigen::VectorXf &face_area_weights) const {
     face_area_weights.resize(mesh.n_faces());
 
     for (TriMesh::ConstFaceIter cf_it = mesh.faces_begin();
@@ -452,8 +452,8 @@ private:
                              TriMesh &output_mesh) {
     // Rescale closeness weight using the ratio between face number and vertex
     // number, and take its square root
-    double w_closeness = param.mesh_update_closeness_weight *
-                         double(mesh_.n_faces()) / mesh_.n_vertices();
+    float w_closeness = param.mesh_update_closeness_weight *
+                        float(mesh_.n_faces()) / mesh_.n_vertices();
 
     output_mesh = mesh_;
 
@@ -471,19 +471,19 @@ private:
     get_vertex_points(output_mesh, vtx_pos);
 
     int n_faces = output_mesh.n_faces();
-    Eigen::Matrix3Xd target_plane_local_frames(
+    Eigen::Matrix3Xf target_plane_local_frames(
         3, 2 * n_faces); // Local frame for the target plane of each face
     std::vector<bool> local_frame_initialized(n_faces, false);
 
-    Eigen::MatrixX3d wX0 =
+    Eigen::MatrixX3f wX0 =
         vtx_pos.transpose() *
         w_closeness; // Part of the linear system right-hand-side that
                      // corresponds to initial vertex positions
-    Eigen::MatrixX3d B(3 * n_faces,
+    Eigen::MatrixX3f B(3 * n_faces,
                        3); // Per-face target position of the new vertices
 
     int n_vtx = output_mesh.n_vertices();
-    Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
+    Eigen::MatrixX3f rhs(n_vtx, 3), sol(n_vtx, 3);
 
     Timer timer;
     Timer::EventID update_begin_time = timer.get_time();
@@ -502,15 +502,15 @@ private:
       OMP_PARALLEL {
         OMP_FOR
         for (int i = 0; i < n_faces; ++i) {
-          Eigen::Vector3d current_normal = to_eigen_vec3d(
+          Eigen::Vector3f current_normal = to_eigen_vec3d(
               output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
-          Eigen::Vector3d target_normal = target_normals.col(i);
+          Eigen::Vector3f target_normal = target_normals.col(i);
 
-          Eigen::Matrix3d face_vtx_pos;
+          Eigen::Matrix3f face_vtx_pos;
           get_mean_centered_face_vtx_pos(vtx_pos, face_vtx_idx.col(i),
                                          face_vtx_pos);
 
-          Eigen::Matrix3Xd target_pos;
+          Eigen::Matrix3Xf target_pos;
 
           // If the current normal is not pointing away from the target normal,
           // simply project the points onto the target plane
@@ -520,13 +520,13 @@ private:
                 target_normal * (target_normal.transpose() * face_vtx_pos);
           } else {
             // Otherwise, project the points onto a line in the target plane
-            typedef Eigen::Matrix<double, 3, 2> Matrix32d;
-            Matrix32d current_local_frame;
+            typedef Eigen::Matrix<float, 3, 2> Matrix32f;
+            Matrix32f current_local_frame;
             if (local_frame_initialized[i]) {
               current_local_frame =
                   target_plane_local_frames.block(0, 2 * i, 3, 2);
             } else {
-              Eigen::JacobiSVD<Eigen::Vector3d,
+              Eigen::JacobiSVD<Eigen::Vector3f,
                                Eigen::FullPivHouseholderQRPreconditioner>
                   jSVD_normal(target_normal, Eigen::ComputeFullU);
               current_local_frame = jSVD_normal.matrixU().block(0, 1, 3, 2);
@@ -535,13 +535,13 @@ private:
               local_frame_initialized[i] = true;
             }
 
-            Matrix32d local_coord =
+            Matrix32f local_coord =
                 face_vtx_pos.transpose() * current_local_frame;
-            Eigen::JacobiSVD<Matrix32d> jSVD_coord(local_coord,
+            Eigen::JacobiSVD<Matrix32f> jSVD_coord(local_coord,
                                                    Eigen::ComputeFullV);
-            Eigen::Vector2d fitting_line_direction =
+            Eigen::Vector2f fitting_line_direction =
                 jSVD_coord.matrixV().col(0);
-            Eigen::Vector3d line_direction_3d =
+            Eigen::Vector3f line_direction_3d =
                 current_local_frame * fitting_line_direction;
             target_pos = line_direction_3d *
                          (line_direction_3d.transpose() * face_vtx_pos);
@@ -584,16 +584,16 @@ private:
 
     int n_faces = output_mesh.n_faces();
     int n_vtx = output_mesh.n_vertices();
-    Eigen::VectorXd face_area_weights;
+    Eigen::VectorXf face_area_weights;
     get_face_area_weights(output_mesh, face_area_weights);
 
     // Compute the initial centroid
-    Eigen::Vector3d initial_centroid =
+    Eigen::Vector3f initial_centroid =
         compute_centroid(face_vtx_idx, face_area_weights, vtx_pos);
 
     // Set up the linear least squares system
-    SparseMatrixXd A(3 * n_faces + 1, n_vtx);
-    Eigen::MatrixX3d B(3 * n_faces + 1, 3);
+    SparseMatrixXf A(3 * n_faces + 1, n_vtx);
+    Eigen::MatrixX3f B(3 * n_faces + 1, 3);
     std::vector<Triplet> A_triplets(9 * n_faces + 1);
 
     // Set the target position of the first vertex at the origin
@@ -604,20 +604,19 @@ private:
       OMP_FOR
       for (int i = 0; i < n_faces; ++i) {
         // Compute rotation from current face to the target plane
-        Eigen::Vector3d init_normal = to_eigen_vec3d(
+        Eigen::Vector3f init_normal = to_eigen_vec3d(
             output_mesh.calc_face_normal(TriMesh::FaceHandle(i)));
-        Eigen::Vector3d target_normal = target_normals.col(i);
-        Eigen::Quaternion<double> rot =
-            Eigen::Quaternion<double>::FromTwoVectors(init_normal,
-                                                      target_normal);
+        Eigen::Vector3f target_normal = target_normals.col(i);
+        Eigen::Quaternion<float> rot = Eigen::Quaternion<float>::FromTwoVectors(
+            init_normal, target_normal);
 
         Eigen::Vector3i vtx_idx = face_vtx_idx.col(i);
-        Eigen::Matrix3d face_vtx_pos;
+        Eigen::Matrix3f face_vtx_pos;
         for (int j = 0; j < 3; ++j) {
           face_vtx_pos.col(j) = vtx_pos.col(vtx_idx(j));
         }
 
-        double area_weight = std::sqrt(face_area_weights(i));
+        float area_weight = std::sqrt(face_area_weights(i));
 
         for (int j = 0; j < 3; ++j) {
           // Search for coefficients such that
@@ -627,16 +626,16 @@ private:
 
           int i1 = j, i2 = (j + 1) % 3, i3 = (j + 2) % 3;
 
-          Eigen::Vector3d v1 = face_vtx_pos.col(i1), v2 = face_vtx_pos.col(i2),
+          Eigen::Vector3f v1 = face_vtx_pos.col(i1), v2 = face_vtx_pos.col(i2),
                           v3 = face_vtx_pos.col(i3);
 
-          double a = 0.5;
+          float a = 0.5;
           if ((v2 - v3).norm() > 1e-12) {
             a = (v1 - v3).dot(v2 - v3) / (v2 - v3).squaredNorm();
           }
 
           // Compute gradient coefficient w.r.t vertex positions
-          Eigen::Vector3d current_grad_coef;
+          Eigen::Vector3f current_grad_coef;
           current_grad_coef(i1) = 1.0;
           current_grad_coef(i2) = -a;
           current_grad_coef(i3) = a - 1.0;
@@ -653,7 +652,7 @@ private:
               Triplet(row_idx, vtx_idx(i3), current_grad_coef(i3));
 
           // Put the target gradient on the right-hand-side
-          Eigen::Vector3d target_grad =
+          Eigen::Vector3f target_grad =
               rot * (face_vtx_pos * current_grad_coef);
           B.row(row_idx) = target_grad.transpose();
         }
@@ -662,10 +661,10 @@ private:
 
     // Solver linear system
     A.setFromTriplets(A_triplets.begin(), A_triplets.end());
-    SparseMatrixXd At = A.transpose();
-    SparseMatrixXd M = At * A;
-    Eigen::MatrixX3d rhs = At * B;
-    Eigen::MatrixX3d sol(n_vtx, 3);
+    SparseMatrixXf At = A.transpose();
+    SparseMatrixXf M = At * A;
+    Eigen::MatrixX3f rhs = At * B;
+    Eigen::MatrixX3f sol(n_vtx, 3);
 
     linear_solver_.reset_pattern();
     if (!(linear_solver_.compute(M) && linear_solver_.solve(rhs, sol))) {
@@ -677,7 +676,7 @@ private:
 
     // Align the new mesh with the intial mesh
     vtx_pos = sol.transpose();
-    Eigen::Vector3d new_centroid =
+    Eigen::Vector3f new_centroid =
         compute_centroid(face_vtx_idx, area_weights_, vtx_pos);
     vtx_pos.colwise() += initial_centroid - new_centroid;
     set_vertex_points(output_mesh, vtx_pos);
@@ -686,32 +685,32 @@ private:
   }
 
   // Generate the matrix for mean-centering of the vertices of a triangle
-  void get_mean_centering_matrix(Eigen::Matrix3d &mat) {
-    mat = Eigen::Matrix3d::Identity() - Eigen::Matrix3d::Constant(1.0 / 3);
+  void get_mean_centering_matrix(Eigen::Matrix3f &mat) {
+    mat = Eigen::Matrix3f::Identity() - Eigen::Matrix3f::Constant(1.0 / 3);
   }
 
-  void get_mean_centered_face_vtx_pos(const Eigen::Matrix3Xd &vtx_pos,
+  void get_mean_centered_face_vtx_pos(const Eigen::Matrix3Xf &vtx_pos,
                                       const Eigen::Vector3i &face_vtx,
-                                      Eigen::Matrix3d &face_vtx_pos) {
+                                      Eigen::Matrix3f &face_vtx_pos) {
     for (int i = 0; i < 3; ++i) {
       face_vtx_pos.col(i) = vtx_pos.col(face_vtx(i));
     }
 
-    Eigen::Vector3d mean_pt = face_vtx_pos.rowwise().mean();
+    Eigen::Vector3f mean_pt = face_vtx_pos.rowwise().mean();
     face_vtx_pos.colwise() -= mean_pt;
   }
 
   // Compute the centroid of a mesh given its vertex positions and face areas
-  Eigen::Vector3d compute_centroid(const Eigen::Matrix3Xi &face_vtx_idx,
-                                   const Eigen::VectorXd &face_areas,
-                                   const Eigen::Matrix3Xd &vtx_pos) {
+  Eigen::Vector3f compute_centroid(const Eigen::Matrix3Xi &face_vtx_idx,
+                                   const Eigen::VectorXf &face_areas,
+                                   const Eigen::Matrix3Xf &vtx_pos) {
     int n_faces = face_vtx_idx.cols();
-    Eigen::Matrix3Xd face_centroids(3, n_faces);
+    Eigen::Matrix3Xf face_centroids(3, n_faces);
 
     OMP_PARALLEL {
       OMP_FOR
       for (int i = 0; i < n_faces; ++i) {
-        Eigen::Vector3d c = Eigen::Vector3d::Zero();
+        Eigen::Vector3f c = Eigen::Vector3f::Zero();
         Eigen::Vector3i face_vtx = face_vtx_idx.col(i);
 
         for (int j = 0; j < 3; ++j) {
@@ -730,20 +729,20 @@ private:
 
   // Compute the L2 norm between the initial mesh and filtered mesh
   void show_normalized_mesh_displacement_norm(const TriMesh &filtered_mesh) {
-    Eigen::Matrix3Xd init_vtx_pos, new_vtx_pos;
+    Eigen::Matrix3Xf init_vtx_pos, new_vtx_pos;
     get_vertex_points(mesh_, init_vtx_pos);
     get_vertex_points(filtered_mesh, new_vtx_pos);
-    Eigen::VectorXd vtx_disp_sqr_norm =
+    Eigen::VectorXf vtx_disp_sqr_norm =
         (init_vtx_pos - new_vtx_pos).colwise().squaredNorm();
 
     // Computer normalized vertex area weights from the original mesh
-    Eigen::VectorXd face_area_weights;
+    Eigen::VectorXf face_area_weights;
     get_face_area_weights(mesh_, face_area_weights);
     Eigen::Matrix3Xi face_vtx_indices;
     get_face_vertex_indices(mesh_, face_vtx_indices);
     int n_faces = mesh_.n_faces();
 
-    Eigen::VectorXd vtx_area(mesh_.n_vertices());
+    Eigen::VectorXf vtx_area(mesh_.n_vertices());
     vtx_area.setZero();
     for (int i = 0; i < n_faces; ++i) {
       for (int j = 0; j < 3; ++j) {
@@ -758,7 +757,7 @@ private:
               << std::endl;
   }
 
-  void show_error_statistics(const Eigen::VectorXd &err_values, double bin_size,
+  void show_error_statistics(const Eigen::VectorXf &err_values, float bin_size,
                              int n_bins) {
     int n_elems = err_values.size();
 
@@ -771,7 +770,7 @@ private:
       }
     }
 
-    Eigen::VectorXd bin_count(n_bins + 1);
+    Eigen::VectorXf bin_count(n_bins + 1);
     bin_count.setZero();
 
     for (int i = 0; i < n_elems; ++i) {
@@ -781,8 +780,8 @@ private:
     bin_count /= bin_count.sum();
 
     for (int i = 0; i < n_bins; ++i) {
-      double lower_val = bin_size * i;
-      double upper_val = bin_size * (i + 1);
+      float lower_val = bin_size * i;
+      float upper_val = bin_size * (i + 1);
       std::cout << lower_val << " to " << upper_val << ": "
                 << bin_count(i) * 100 << "%" << std::endl;
     }
@@ -798,13 +797,13 @@ private:
                                     int bin_size_in_degrees, int n_bins) {
     // Compute the normal deviation angle, and the number of flipped normals
     int n_faces = mesh.n_faces();
-    Eigen::VectorXd face_normal_error_angle(n_faces);
+    Eigen::VectorXf face_normal_error_angle(n_faces);
 
     for (int i = 0; i < n_faces; ++i) {
-      Eigen::Vector3d normal =
+      Eigen::Vector3f normal =
           to_eigen_vec3d(mesh.calc_face_normal(TriMesh::FaceHandle(i)));
-      double error_angle_cos =
-          std::max(-1.0, std::min(1.0, normal.dot(target_normals.col(i))));
+      float error_angle_cos =
+          std::max(-1.0f, std::min(1.0f, normal.dot(target_normals.col(i))));
       face_normal_error_angle(i) = std::acos(error_angle_cos);
     }
 

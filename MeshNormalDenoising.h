@@ -111,9 +111,9 @@ public:
   }
 
 protected:
-  virtual void get_initial_data(Eigen::MatrixXd &guidance_normals,
-                                Eigen::MatrixXd &init_normals,
-                                Eigen::VectorXd &area_weights) {
+  virtual void get_initial_data(Eigen::MatrixXf &guidance_normals,
+                                Eigen::MatrixXf &init_normals,
+                                Eigen::VectorXf &area_weights) {
     // Call the base class method to fill in initial data
     MeshNormalFilter::get_initial_data(guidance_normals, init_normals,
                                        area_weights);
@@ -123,7 +123,7 @@ protected:
     int face_count = mesh_.n_faces(), edge_count = mesh_.n_edges(),
         vtx_count = mesh_.n_vertices();
 
-    std::vector<double> edge_saliency(
+    std::vector<float> edge_saliency(
         edge_count, 0); // Pre-computed edge saliency, defined as difference
                         // between adjacent normals
 
@@ -131,10 +131,10 @@ protected:
     std::vector<std::vector<int>> adj_nonboundary_edges_per_vtx(vtx_count);
     std::vector<std::vector<int>> neighborhood_faces_per_face(face_count);
 
-    std::vector<double> patch_normal_consistency(face_count, 0);
-    Eigen::Matrix3Xd patch_avg_normal(3, face_count);
+    std::vector<float> patch_normal_consistency(face_count, 0);
+    Eigen::Matrix3Xf patch_avg_normal(3, face_count);
 
-    double epsilon = 1e-9;
+    float epsilon = 1e-9;
 
     OMP_PARALLEL {
       OMP_FOR
@@ -204,9 +204,9 @@ protected:
         int n_faces_in_patch = faces_in_patch.size();
         int n_edges_in_patch = edges_in_patch.size();
 
-        Eigen::Matrix3Xd face_normals(3, n_faces_in_patch);
-        Eigen::VectorXd face_area(n_faces_in_patch);
-        Eigen::VectorXd edge_saliency_values(n_edges_in_patch);
+        Eigen::Matrix3Xf face_normals(3, n_faces_in_patch);
+        Eigen::VectorXf face_area(n_faces_in_patch);
+        Eigen::VectorXf edge_saliency_values(n_edges_in_patch);
 
         for (int k = 0; k < n_edges_in_patch; ++k) {
           edge_saliency_values(k) = edge_saliency[edges_in_patch[k]];
@@ -224,12 +224,12 @@ protected:
         }
 
         // Find the max normal difference within a patch
-        double max_normal_diff = 0;
+        float max_normal_diff = 0;
         for (int k = 0; k < n_faces_in_patch - 1; ++k) {
-          Eigen::Matrix3Xd N =
+          Eigen::Matrix3Xf N =
               face_normals.block(0, k + 1, 3, n_faces_in_patch - k - 1);
           N.colwise() -= face_normals.col(k);
-          double max_diff = N.colwise().norm().maxCoeff();
+          float max_diff = N.colwise().norm().maxCoeff();
           max_normal_diff = std::max(max_normal_diff, max_diff);
         }
 
@@ -244,7 +244,7 @@ protected:
         std::vector<int> &neighborhood_faces = neighborhood_faces_per_face[i];
         assert(!neighborhood_faces.empty());
 
-        Eigen::VectorXd patch_scores(neighborhood_faces.size());
+        Eigen::VectorXf patch_scores(neighborhood_faces.size());
         for (int k = 0; k < static_cast<int>(neighborhood_faces.size()); ++k) {
           patch_scores(k) = patch_normal_consistency[neighborhood_faces[k]];
         }

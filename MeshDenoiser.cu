@@ -67,8 +67,8 @@ int main(int argc, char **argv) {
   param.output();
 
   // Normalize the input mesh
-  Eigen::Vector3d original_center;
-  double original_scale;
+  Eigen::Vector3f original_center;
+  float original_scale;
   SDFilter::normalize_mesh(mesh, original_center, original_scale);
 
   // Filter the normals and construct the output mesh

@@ -34,7 +34,7 @@
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
 #else
-__device__ double atomicAdd(double *a, double b) { return b; }
+__device__ float atomicAdd(float *a, float b) { return b; }
 #endif
 
 #include "EigenTypes.h"
@@ -99,18 +99,18 @@ void convert_from_gpu_memory(T *dev_matrix, EigenType &matrix) {
   cudaFree(dev_matrix);
 }
 
-__global__ void accumulate(int num_elements, const double *array,
-                           double *result) {
+__global__ void accumulate(int num_elements, const float *array,
+                           float *result) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = gridDim.x * blockDim.x;
 
-  double sum = 0.0;
+  float sum = 0.0;
   for (int i = tid; i < num_elements; i += stride) {
     sum += array[i];
   }
 
   // Perform reduction within the block using shared memory
-  extern __shared__ double shared_sum[];
+  extern __shared__ float shared_sum[];
   shared_sum[threadIdx.x] = sum;
   __syncthreads();
 
@@ -128,41 +128,41 @@ __global__ void accumulate(int num_elements, const double *array,
 }
 
 __global__ void scaleAndWeightInitSignals(int signal_count, int signal_dim,
-                                          double *dev_weighted_init_signals,
-                                          double *dev_init_signals,
-                                          double *dev_area_weights,
-                                          double weight_scaling_factor) {
+                                          float *dev_weighted_init_signals,
+                                          float *dev_init_signals,
+                                          float *dev_area_weights,
+                                          float weight_scaling_factor) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (idx < signal_dim * signal_count) {
     int i = idx % signal_dim;
     int j = idx / signal_dim;
 
-    double weighted_value =
+    float weighted_value =
         dev_init_signals[idx] * dev_area_weights[j] * weight_scaling_factor;
     atomicAdd(&dev_weighted_init_signals[idx], weighted_value);
   }
 }
 
 __global__ void kernel_calculate_neighbor_pair_weights(
-    int n_neighbor_pairs, int signal_dim, double h, int *dev_neighboring_pairs,
-    double *dev_precomputed_area_spatial_guidance_weights, double *dev_signals,
-    double *dev_neighbor_pair_weights) {
+    int n_neighbor_pairs, int signal_dim, float h, int *dev_neighboring_pairs,
+    float *dev_precomputed_area_spatial_guidance_weights, float *dev_signals,
+    float *dev_neighbor_pair_weights) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n_neighbor_pairs) {
     int idx1 = dev_neighboring_pairs[2 * i],
         idx2 = dev_neighboring_pairs[2 * i + 1];
 
     // Calculate squaredNorm of signal difference
-    double signal_diff_norm_squared = 0.0;
+    float signal_diff_norm_squared = 0.0;
     for (int j = 0; j < signal_dim; ++j) {
-      double diff1 = dev_signals[j + signal_dim * idx1];
-      double diff2 = dev_signals[j + signal_dim * idx2];
-      double diff = diff1 - diff2;
+      float diff1 = dev_signals[j + signal_dim * idx1];
+      float diff2 = dev_signals[j + signal_dim * idx2];
+      float diff = diff1 - diff2;
       signal_diff_norm_squared += diff * diff;
     }
 
-    double exp_term = exp(h * signal_diff_norm_squared);
+    float exp_term = exp(h * signal_diff_norm_squared);
 
     dev_neighbor_pair_weights[i] =
         dev_precomputed_area_spatial_guidance_weights[i] * exp_term;
@@ -172,8 +172,8 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 // __global__ void kernel_calculate_filtered_signals(
 //     int signal_count, Eigen::Index signal_dim,
 //     Eigen::Index *dev_neighborhood_info_boundaries,
-//     Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
-//     double *dev_signals, double *dev_filtered_signals) {
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals) {
 //   int i = blockIdx.x * blockDim.x + threadIdx.x;
 //   if (i < signal_count) {
 //     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
@@ -190,7 +190,7 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 //       }
 //     }
 
-//     double sum = 0.0;
+//     float sum = 0.0;
 //     for (int k = 0; k < signal_dim; ++k) {
 //       sum += dev_filtered_signals[i * signal_dim + k] *
 //              dev_filtered_signals[i * signal_dim + k];
@@ -216,23 +216,23 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 __global__ void kernel_calculate_filtered_signals(
     int signal_count, Eigen::Index signal_dim,
     Eigen::Index *dev_neighborhood_info_boundaries,
-    Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
-    double *dev_signals, double *dev_filtered_signals,
-    double *dev_weighted_init_signals) {
+    Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+    float *dev_signals, float *dev_filtered_signals,
+    float *dev_weighted_init_signals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < signal_count) {
     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
 
-    double sum = 0.0;
+    float sum = 0.0;
     for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
       int neighbor_idx = dev_neighborhood_info[2 * j];
       int coef_idx = dev_neighborhood_info[2 * j + 1];
 
-      double weight = dev_neighbor_pair_weights[coef_idx];
+      float weight = dev_neighbor_pair_weights[coef_idx];
       for (int k = 0; k < signal_dim; ++k) {
-        double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
-        double weighted_value = neighbor_value * weight;
+        float neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
+        float weighted_value = neighbor_value * weight;
         dev_filtered_signals[k + signal_dim * i] += weighted_value;
       }
     }
@@ -240,29 +240,30 @@ __global__ void kernel_calculate_filtered_signals(
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] +=
           dev_weighted_init_signals[i * signal_dim + k];
-      double curr = dev_filtered_signals[i * signal_dim + k];
+      float curr = dev_filtered_signals[i * signal_dim + k];
       sum += curr * curr;
     }
-    double inv_sum_sqrt = 1.0 / sqrt(sum);
+    float inv_sum_sqrt = 1.0 / sqrt(sum);
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] *= inv_sum_sqrt;
     }
   }
 }
 
-__global__ void
-kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
-                                  double *dev_signals, double *dev_prev_signals,
-                                  double *dev_area_weights,
-                                  double *dev_var_disp_sqrnorm) {
+__global__ void kernel_calculate_var_disp_sqrnorm(int signal_count,
+                                                  Eigen::Index signal_dim,
+                                                  float *dev_signals,
+                                                  float *dev_prev_signals,
+                                                  float *dev_area_weights,
+                                                  float *dev_var_disp_sqrnorm) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (i < signal_count) {
-    double sqrnorm = 0.0;
+    float sqrnorm = 0.0;
 
     for (int j = 0; j < signal_dim; ++j) {
-      double diff = dev_signals[i * signal_dim + j] -
-                    dev_prev_signals[i * signal_dim + j];
+      float diff = dev_signals[i * signal_dim + j] -
+                   dev_prev_signals[i * signal_dim + j];
       sqrnorm += diff * diff;
     }
     atomicAdd(dev_var_disp_sqrnorm, dev_area_weights[i] * sqrnorm);
@@ -270,18 +271,18 @@ kernel_calculate_var_disp_sqrnorm(int signal_count, Eigen::Index signal_dim,
 }
 
 __global__ void kernel_calculate_var_disp_sqrnorm_opt(
-    int signal_count, Eigen::Index signal_dim, double *dev_signals,
-    double *dev_prev_signals, double *dev_area_weights,
-    double *dev_var_disp_sqrnorm) {
-  extern __shared__ double shared_mem[];
+    int signal_count, Eigen::Index signal_dim, float *dev_signals,
+    float *dev_prev_signals, float *dev_area_weights,
+    float *dev_var_disp_sqrnorm) {
+  extern __shared__ float shared_mem[];
 
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < signal_count) {
-    double sqrNorm = 0.0;
+    float sqrNorm = 0.0;
 
     for (int j = threadIdx.y; j < signal_dim; j += blockDim.y) {
-      double diff = dev_signals[i * signal_dim + j] -
-                    dev_prev_signals[i * signal_dim + j];
+      float diff = dev_signals[i * signal_dim + j] -
+                   dev_prev_signals[i * signal_dim + j];
       sqrNorm += diff * diff;
     }
 
@@ -316,15 +317,15 @@ public:
 
   enum LinearSolverType { CGChol, CGBig, CG, LDLT };
 
-  double lambda; // Regularization weight
-  double eta; // Gaussian standard deviation for spatial weight, relative to the
-              // bounding box diagonal length
-  double mu;  // Gaussian standard deviation for guidance weight
-  double nu;  // Gaussian standard deviation for signal weight
+  float lambda; // Regularization weight
+  float eta; // Gaussian standard deviation for spatial weight, relative to the
+             // bounding box diagonal length
+  float mu;  // Gaussian standard deviation for guidance weight
+  float nu;  // Gaussian standard deviation for signal weight
 
   // Parameters related to termination criteria
   int max_iter;        // Max number of iterations
-  double avg_disp_eps; // Max average per-signal displacement threshold between
+  float avg_disp_eps;  // Max average per-signal displacement threshold between
                        // two iterations for determining convergence
   bool normalize_iterates; // Normalization of the filtered normals in each
                            // iteration
@@ -453,7 +454,7 @@ protected:
   private:
     std::string option_str_, value_str_;
 
-    bool load_value(const std::string &str, double &value) const {
+    bool load_value(const std::string &str, float &value) const {
       try {
         value = std::stod(str);
       } catch (const std::invalid_argument &ia) {
@@ -522,20 +523,20 @@ public:
     return id;
   }
 
-  double elapsed_time(EventID event1, EventID event2) {
+  float elapsed_time(EventID event1, EventID event2) {
     assert(event1 >= 0 && event1 < static_cast<EventID>(time_values_.size()));
     assert(event2 >= 0 && event2 < static_cast<EventID>(time_values_.size()));
 
 #ifdef USE_OPENMP
     return time_values_[event2] - time_values_[event1];
 #else
-    return double(time_values_[event2] - time_values_[event1]) / CLOCKS_PER_SEC;
+    return float(time_values_[event2] - time_values_[event1]) / CLOCKS_PER_SEC;
 #endif
   }
 
 private:
 #ifdef USE_OPENMP
-  std::vector<double> time_values_;
+  std::vector<float> time_values_;
 #else
   std::vector<clock_t> time_values_;
 #endif
@@ -581,49 +582,49 @@ protected:
 
   void fixedpoint_solver(const Parameters &param) {
     int block_size = 512;
-    Eigen::MatrixXd init_signals = signals_;
+    Eigen::MatrixXf init_signals = signals_;
 
-    double *dev_signals;
+    float *dev_signals;
     convert_to_gpu_memory(signals_, &dev_signals);
 
-    double *dev_area_weights;
+    float *dev_area_weights;
     convert_to_gpu_memory(area_weights_, &dev_area_weights);
 
-    double *dev_weighted_init_signals;
+    float *dev_weighted_init_signals;
     cudaMalloc((void **)&dev_weighted_init_signals,
-               (signal_dim_ * signal_count_) * sizeof(double));
+               (signal_dim_ * signal_count_) * sizeof(float));
 
     // Weighted initial signals, as used in the fixed-point solver
-    double weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
+    float weight_scaling_factor = 2 * param.nu * param.nu / param.lambda;
     scaleAndWeightInitSignals<<<(signal_dim_ * signal_count_ + block_size - 1) /
                                     block_size,
                                 block_size>>>(
         signal_count_, signal_dim_, dev_weighted_init_signals, dev_signals,
         dev_area_weights, weight_scaling_factor);
 
-    double h = -0.5 / (param.nu * param.nu);
+    float h = -0.5 / (param.nu * param.nu);
 
     Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
 
     // Compute the termination threshold for area weighted squread norm of
     // signal change between two iterations
-    double *dev_area_weights_sum;
-    cudaMalloc(&dev_area_weights_sum, sizeof(double));
-    cudaMemset(dev_area_weights_sum, 0, sizeof(double));
+    float *dev_area_weights_sum;
+    cudaMalloc(&dev_area_weights_sum, sizeof(float));
+    cudaMemset(dev_area_weights_sum, 0, sizeof(float));
 
     int num_elements = area_weights_.size();
     int grid_size = (num_elements + block_size - 1) / block_size;
 
-    accumulate<<<grid_size, block_size, block_size * sizeof(double)>>>(
+    accumulate<<<grid_size, block_size, block_size * sizeof(float)>>>(
         num_elements, dev_area_weights, dev_area_weights_sum);
 
-    double area_weights_sum;
-    cudaMemcpy(&area_weights_sum, dev_area_weights_sum, sizeof(double),
+    float area_weights_sum;
+    cudaMemcpy(&area_weights_sum, dev_area_weights_sum, sizeof(float),
                cudaMemcpyDeviceToHost);
 
     cudaFree(dev_area_weights_sum);
 
-    double disp_sqr_norm_threshold =
+    float disp_sqr_norm_threshold =
         area_weights_sum * param.avg_disp_eps * param.avg_disp_eps;
 
     int output_frequency = 10;
@@ -631,7 +632,7 @@ protected:
     int *dev_neighboring_pairs;
     convert_to_gpu_memory(neighboring_pairs_, &dev_neighboring_pairs);
 
-    double *dev_precomputed_area_spatial_guidance_weights;
+    float *dev_precomputed_area_spatial_guidance_weights;
     convert_to_gpu_memory(precomputed_area_spatial_guidance_weights_,
                           &dev_precomputed_area_spatial_guidance_weights);
 
@@ -642,18 +643,17 @@ protected:
     Eigen::Index *dev_neighborhood_info;
     convert_to_gpu_memory(neighborhood_info_, &dev_neighborhood_info);
 
-    double *dev_var_disp_sqrnorm;
-    cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(double));
+    float *dev_var_disp_sqrnorm;
+    cudaMalloc((void **)&dev_var_disp_sqrnorm, sizeof(float));
 
     // The weights for neighboring pairs that are used for convex combination of
     // neighboring signals in the fixed-point solver
-    double *dev_neighbor_pair_weights;
+    float *dev_neighbor_pair_weights;
     cudaMalloc((void **)&dev_neighbor_pair_weights,
-               n_neighbor_pairs * sizeof(double));
+               n_neighbor_pairs * sizeof(float));
 
-    double *dev_filtered_signals;
-    cudaMalloc((void **)&dev_filtered_signals,
-               signals_.size() * sizeof(double));
+    float *dev_filtered_signals;
+    cudaMalloc((void **)&dev_filtered_signals, signals_.size() * sizeof(float));
 
     int grid_size_weights = (n_neighbor_pairs + block_size - 1) / block_size;
     int grid_size_filtered = (signal_count_ + block_size - 1) / block_size;
@@ -664,15 +664,14 @@ protected:
     int grid_size_sqrnorm =
         (signals_.cols() + threads_per_block.x - 1) / threads_per_block.x;
 
-    int shared_size =
-        threads_per_block.x * threads_per_block.y * sizeof(double);
+    int shared_size = threads_per_block.x * threads_per_block.y * sizeof(float);
 
     for (int num_iter = 1; num_iter <= param.max_iter; ++num_iter) {
-      cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(double));
-      cudaMemset(dev_filtered_signals, 0, signals_.size() * sizeof(double));
+      cudaMemset(dev_var_disp_sqrnorm, 0, sizeof(float));
+      cudaMemset(dev_filtered_signals, 0, signals_.size() * sizeof(float));
 
       // cudaMemcpy(dev_filtered_signals, dev_weighted_init_signals,
-      //            signals_.size() * sizeof(double), cudaMemcpyDeviceToDevice);
+      //            signals_.size() * sizeof(float), cudaMemcpyDeviceToDevice);
 
       kernel_calculate_neighbor_pair_weights<<<grid_size_weights, block_size>>>(
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
@@ -690,8 +689,8 @@ protected:
           signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
           dev_area_weights, dev_var_disp_sqrnorm);
 
-      double var_disp_sqrnorm;
-      cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(double),
+      float var_disp_sqrnorm;
+      cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(float),
                  cudaMemcpyDeviceToHost);
 
       print_cuda_errors();
@@ -738,7 +737,7 @@ protected:
         : solver_type_(solver_type), pattern_analyzed(false) {}
 
     // Initialize the solver with matrix
-    bool compute(const SparseMatrixXd &A) {
+    bool compute(const SparseMatrixXf &A) {
       if (solver_type_ == Parameters::LDLT) {
         if (!pattern_analyzed) {
           LDLT_solver_.analyzePattern(A);
@@ -794,8 +793,8 @@ protected:
 
   private:
     Parameters::LinearSolverType solver_type_;
-    Eigen::SimplicialLDLT<SparseMatrixXd> LDLT_solver_;
-    Eigen::ConjugateGradient<SparseMatrixXd, Eigen::Lower | Eigen::Upper>
+    Eigen::SimplicialLDLT<SparseMatrixXf> LDLT_solver_;
+    Eigen::ConjugateGradient<SparseMatrixXf, Eigen::Lower | Eigen::Upper>
         CG_solver_;
 
     bool pattern_analyzed; // Flag for symbolic factorization
@@ -803,6 +802,8 @@ protected:
     template <typename SolverT>
     bool check_error(const SolverT &solver, const std::string &error_message) {
       if (solver.info() != Eigen::Success) {
+
+        std::cerr << "Error happened" << std::endl;
         std::cerr << error_message << std::endl;
       }
 
@@ -814,14 +815,14 @@ protected:
   int signal_dim_;   // Dimension of the signals
   int signal_count_; // Number of signals
 
-  Eigen::MatrixXd
+  Eigen::MatrixXf
       signals_; // Signals to be filtered. Represented in homogeneous form
                 // when there is no normalization constraint
-  Eigen::VectorXd area_weights_; // Area weights for each element
+  Eigen::VectorXf area_weights_; // Area weights for each element
 
   Eigen::Matrix2Xi neighboring_pairs_; // Each column stores the indices for a
                                        // pair of neighboring elements
-  Eigen::VectorXd
+  Eigen::VectorXf
       precomputed_area_spatial_guidance_weights_; // Precomputed weights
                                                   // (area, spatial Gaussian
                                                   // and guidance Gaussian)
@@ -841,14 +842,14 @@ protected:
 
   // Overwrite this in a subclass to provide the initial spatial positions,
   // guidance, and signals.
-  virtual void get_initial_data(Eigen::MatrixXd &guidance,
-                                Eigen::MatrixXd &init_signals,
-                                Eigen::VectorXd &area_weights) = 0;
+  virtual void get_initial_data(Eigen::MatrixXf &guidance,
+                                Eigen::MatrixXf &init_signals,
+                                Eigen::VectorXf &area_weights) = 0;
 
   bool initialize_filter(Parameters &param) {
 
     // Retrive input signals and their area weights
-    Eigen::MatrixXd guidance, init_signals;
+    Eigen::MatrixXf guidance, init_signals;
     get_initial_data(guidance, init_signals, area_weights_);
 
     signal_dim_ = init_signals.rows();
@@ -865,7 +866,7 @@ protected:
       signals_.row(signal_dim_).setOnes();
     }
 
-    Eigen::VectorXd neighbor_dists;
+    Eigen::VectorXf neighbor_dists;
     if (!get_neighborhood(param, neighboring_pairs_, neighbor_dists)) {
       std::cerr
           << "Unable to get neighborhood information, no filtering done..."
@@ -881,9 +882,9 @@ protected:
     }
 
     precomputed_area_spatial_guidance_weights_.resize(n_neighbor_pairs);
-    double h_spatial = -0.5 / (param.eta * param.eta);
-    double h_guidance = -0.5 / (param.mu * param.mu);
-    Eigen::VectorXd area_spatial_weights(
+    float h_spatial = -0.5 / (param.eta * param.eta);
+    float h_guidance = -0.5 / (param.mu * param.mu);
+    Eigen::VectorXf area_spatial_weights(
         n_neighbor_pairs); // Area-integrated spatial weights, used for
                            // rescaling lambda
 
@@ -892,7 +893,7 @@ protected:
       for (Eigen::Index i = 0; i < n_neighbor_pairs; ++i) {
         // Read the indices of a neighboring pair, and their distance
         int idx1 = neighboring_pairs_(0, i), idx2 = neighboring_pairs_(1, i);
-        double d = neighbor_dists(i);
+        float d = neighbor_dists(i);
 
         // Compute the weights associated with the pair
         area_spatial_weights(i) = (area_weights_(idx1) + area_weights_(idx2)) *
@@ -953,16 +954,16 @@ protected:
   // Find out all neighboring paris, as well as their distance
   virtual bool get_neighborhood(const Parameters &param,
                                 Eigen::Matrix2Xi &neighbor_pairs,
-                                Eigen::VectorXd &neighbor_dist) = 0;
+                                Eigen::VectorXf &neighbor_dist) = 0;
 
-  double target_function(const Parameters &param,
-                         const Eigen::MatrixXd &init_signals) {
+  float target_function(const Parameters &param,
+                        const Eigen::MatrixXf &init_signals) {
     // Compute regularizer term, using the contribution from each neighbor
     // pair
     Eigen::Index n_neighbor_pairs = neighboring_pairs_.cols();
-    Eigen::VectorXd pair_values(n_neighbor_pairs);
+    Eigen::VectorXf pair_values(n_neighbor_pairs);
     pair_values.setZero();
-    double h = -0.5 / (param.nu * param.nu);
+    float h = -0.5 / (param.nu * param.nu);
 
     OMP_PARALLEL {
       OMP_FOR
@@ -975,11 +976,11 @@ protected:
       }
     }
 
-    double reg = pair_values.sum();
+    float reg = pair_values.sum();
 
     // Compute the fidelity term, which is the squared difference between
     // current and initial signals, weighted by the areas
-    double fid =
+    float fid =
         area_weights_.dot((signals_ - init_signals).colwise().squaredNorm());
 
     return fid + reg * param.lambda;
