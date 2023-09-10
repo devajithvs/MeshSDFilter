@@ -522,7 +522,7 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
     cudaDeviceSynchronize();
     k++;
   }
-  printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+  // printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
 
   if (matA) {
     cusparseDestroySpMat(matA);
