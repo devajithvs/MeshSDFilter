@@ -154,11 +154,11 @@ public:
                 << " secs" << std::endl;
     }
 
-    // if (print_error_evaluation_) {
+    if (print_error_evaluation_) {
       std::cout << std::endl;
       show_normalized_mesh_displacement_norm(output_mesh);
       show_normal_error_statistics(output_mesh, target_normals, 2, 10);
-    // }
+    }
 
     return true;
   }
@@ -465,8 +465,6 @@ private:
     }
 
     std::cout << "Starting iterative mesh update......" << std::endl;
-    std::cerr << "Starting all the mesh update" << std::endl;
-
     Matrix3X vtx_pos;
     get_vertex_points(output_mesh, vtx_pos);
 
@@ -486,19 +484,12 @@ private:
     Eigen::MatrixX3d rhs(n_vtx, 3), sol(n_vtx, 3);
     sol.setZero();
 
-    Timer timer;
-    Timer::EventID update_begin_time = timer.get_time();
     if (!linear_solver_.compute(M)) {
       std::cerr << "Error: failed to pre-factorize mesh update system"
                 << std::endl;
       return false;
     }
-    Timer::EventID update_end_time = timer.get_time();
-    std::cout << "Mesh factoring timing: "
-                << timer.elapsed_time(update_begin_time, update_end_time)
-                << " secs" << std::endl;
 
-    std::cerr << "Before all the iterations" << std::endl;
     for (int iter = 0; iter < param.mesh_update_iter; ++iter) {
       OMP_PARALLEL {
         OMP_FOR
@@ -562,12 +553,6 @@ private:
       vtx_pos = sol.transpose();
       set_vertex_points(output_mesh, vtx_pos);
     }
-
-    Timer::EventID update_begin_time1 = timer.get_time();
-    std::cout << "Mesh solve timing: "
-                << timer.elapsed_time(update_end_time, update_begin_time1)
-                << " secs" << std::endl;
-
     return true;
   }
 
