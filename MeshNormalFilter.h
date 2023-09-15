@@ -484,6 +484,7 @@ private:
 
     int n_vtx = output_mesh.n_vertices();
     Eigen::MatrixX3f rhs(n_vtx, 3), sol(n_vtx, 3);
+    sol.setZero();
 
     Timer timer;
     Timer::EventID update_begin_time = timer.get_time();
