@@ -443,18 +443,69 @@ void solveUsingPreconditionedConjugateGradient0(
   cudaFree(d_y);
 }
 
-void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
-                                 int *d_csrColInd, double *d_csrVal,
-                                 double *d_b, double *d_x,
-                                 const double tol = 1e-5f,
-                                 const int max_iter = 10000) {
-
+struct ConjugateGradientState {
   cublasHandle_t cublasHandle;
   cusparseHandle_t cusparseHandle;
 
-  cublasCreate(&cublasHandle);
+  double *d_p, *d_y, *d_x;
+
+  cusparseSpMatDescr_t matA = NULL;
+  cusparseDnVecDescr_t vecx = NULL;
+  cusparseDnVecDescr_t vecp = NULL;
+  cusparseDnVecDescr_t vecy = NULL;
+};
+
+// Function to initialize ConjugateGradientState
+void initializeConjugateGradientState(int N, int nz, int *d_csrRowPtr,
+                                      int *d_csrColInd, double *d_csrVal,
+                                      double *d_x,
+                                      ConjugateGradientState &state) {
+  cublasCreate(&state.cublasHandle);
+  cusparseCreate(&state.cusparseHandle);
+
+  state.d_x = d_x;
+
+  cudaMalloc((void **)&state.d_p, N * sizeof(double));
+  cudaMalloc((void **)&state.d_y, N * sizeof(double));
+
+  /* Wrap raw data into cuSPARSE generic API objects */
+  cusparseCreateCsr(&state.matA, N, N, nz, d_csrRowPtr, d_csrColInd, d_csrVal,
+                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+  cusparseCreateDnVec(&state.vecx, N, state.d_x, CUDA_R_64F);
+
+  cusparseCreateDnVec(&state.vecp, N, state.d_p, CUDA_R_64F);
+
+  cusparseCreateDnVec(&state.vecy, N, state.d_y, CUDA_R_64F);
+}
+
+void destroyConjugateGradientState(ConjugateGradientState &state) {
+  cusparseDestroy(state.cusparseHandle);
+  cublasDestroy(state.cublasHandle);
+  cudaFree(state.d_p);
+  cudaFree(state.d_y);
+
+  if (state.matA) {
+    cusparseDestroySpMat(state.matA);
+  }
+  if (state.vecx) {
+    cusparseDestroyDnVec(state.vecx);
+  }
+  if (state.vecy) {
+    cusparseDestroyDnVec(state.vecy);
+  }
+  if (state.vecp) {
+    cusparseDestroyDnVec(state.vecp);
+  }
+}
+
+void solveUsingConjugateGradient(ConjugateGradientState &state, int N, int nz,
+                                 int *d_csrRowPtr, int *d_csrColInd,
+                                 double *d_csrVal, double *d_b, double *d_x,
+                                 const double tol = 1e-5f,
+                                 const int max_iter = 10000) {
   cublasStatus_t blasStatus;
-  cusparseCreate(&cusparseHandle);
 
   double a, b, na, r1, dot;
   double alpha = 1.0;
@@ -463,85 +514,50 @@ void solveUsingConjugateGradient(int N, int nz, int *d_csrRowPtr,
 
   double r0 = 0.0;
 
-  double *d_p, *d_y;
-
-  cudaMalloc((void **)&d_p, N * sizeof(double));
-  cudaMalloc((void **)&d_y, N * sizeof(double));
-
-  /* Wrap raw data into cuSPARSE generic API objects */
-  cusparseSpMatDescr_t matA = NULL;
-  cusparseCreateCsr(&matA, N, N, nz, d_csrRowPtr, d_csrColInd, d_csrVal,
-                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
-  cusparseDnVecDescr_t vecx = NULL;
-  cusparseCreateDnVec(&vecx, N, d_x, CUDA_R_64F);
-  cusparseDnVecDescr_t vecp = NULL;
-  cusparseCreateDnVec(&vecp, N, d_p, CUDA_R_64F);
-  cusparseDnVecDescr_t vecy = NULL;
-  cusparseCreateDnVec(&vecy, N, d_y, CUDA_R_64F);
-
   /* Allocate workspace for cuSPARSE */
   size_t bufferSize = 0;
-  cusparseSpMV_bufferSize(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                          &alpha, matA, vecx, &beta, vecy, CUDA_R_64F,
+  cusparseSpMV_bufferSize(state.cusparseHandle,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, state.matA,
+                          state.vecx, &beta, state.vecy, CUDA_R_64F,
                           CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
   void *buffer = NULL;
   cudaMalloc(&buffer, bufferSize);
 
   // Start CG algorithm
-  cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
-               vecx, &beta, vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
-               buffer);
+  cusparseSpMV(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+               state.matA, state.vecx, &beta, state.vecy, CUDA_R_64F,
+               CUSPARSE_SPMV_ALG_DEFAULT, buffer);
 
-  cublasDaxpy(cublasHandle, N, &alpham1, d_y, 1, d_b, 1);
-  blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
+  cublasDaxpy(state.cublasHandle, N, &alpham1, state.d_y, 1, d_b, 1);
+  blasStatus = cublasDdot(state.cublasHandle, N, d_b, 1, d_b, 1, &r1);
 
   int k = 1;
 
   while (r1 > tol * tol && k <= max_iter) {
     if (k > 1) {
       b = r1 / r0;
-      blasStatus = cublasDscal(cublasHandle, N, &b, d_p, 1);
-      blasStatus = cublasDaxpy(cublasHandle, N, &alpha, d_b, 1, d_p, 1);
+      blasStatus = cublasDscal(state.cublasHandle, N, &b, state.d_p, 1);
+      blasStatus = cublasDaxpy(state.cublasHandle, N, &alpha, d_b, 1, state.d_p, 1);
     } else {
-      blasStatus = cublasDcopy(cublasHandle, N, d_b, 1, d_p, 1);
+      blasStatus = cublasDcopy(state.cublasHandle, N, d_b, 1, state.d_p, 1);
     }
 
-    cusparseSpMV(cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA,
-                 vecp, &beta, vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
+    cusparseSpMV(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, state.matA,
+                 state.vecp, &beta, state.vecy, CUDA_R_64F, CUSPARSE_SPMV_ALG_DEFAULT,
                  buffer);
-    blasStatus = cublasDdot(cublasHandle, N, d_p, 1, d_y, 1, &dot);
+    blasStatus = cublasDdot(state.cublasHandle, N, state.d_p, 1, state.d_y, 1, &dot);
     a = r1 / dot;
 
-    blasStatus = cublasDaxpy(cublasHandle, N, &a, d_p, 1, d_x, 1);
+    blasStatus = cublasDaxpy(state.cublasHandle, N, &a, state.d_p, 1, d_x, 1);
     na = -a;
-    blasStatus = cublasDaxpy(cublasHandle, N, &na, d_y, 1, d_b, 1);
+    blasStatus = cublasDaxpy(state.cublasHandle, N, &na, state.d_y, 1, d_b, 1);
 
     r0 = r1;
-    blasStatus = cublasDdot(cublasHandle, N, d_b, 1, d_b, 1, &r1);
+    blasStatus = cublasDdot(state.cublasHandle, N, d_b, 1, d_b, 1, &r1);
     cudaDeviceSynchronize();
     k++;
   }
   // printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
-
-  if (matA) {
-    cusparseDestroySpMat(matA);
-  }
-  if (vecx) {
-    cusparseDestroyDnVec(vecx);
-  }
-  if (vecy) {
-    cusparseDestroyDnVec(vecy);
-  }
-  if (vecp) {
-    cusparseDestroyDnVec(vecp);
-  }
-
-  // Clean up
-  cusparseDestroy(cusparseHandle);
-  cublasDestroy(cublasHandle);
-  cudaFree(d_p);
-  cudaFree(d_y);
 }
 
 struct CuSolverState {
@@ -721,6 +737,9 @@ public:
       CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
 
+      initializeConjugateGradientState(n, nnz, d_csrRowPtr, d_csrColInd,
+                                       d_csrVal, d_x, CGSolverState);
+
       return true;
     } else if (solver_type_ == Parameters::CGChol) {
 
@@ -825,8 +844,8 @@ public:
         CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(double),
                               cudaMemcpyHostToDevice));
 
-        solveUsingConjugateGradient(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
-                                    d_b, d_x);
+        solveUsingConjugateGradient(CGSolverState, n, nnz, d_csrRowPtr,
+                                    d_csrColInd, d_csrVal, d_b, d_x);
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
@@ -892,6 +911,36 @@ public:
     // cleanupCuSolverState(solverState);
   }
 
+  void destroy() {
+    if (solver_type_ == Parameters::LDLT) {
+
+      return;
+
+    } else if (solver_type_ == Parameters::CG) {
+
+      CUDA_CHECK(cudaFree(d_csrVal));
+      CUDA_CHECK(cudaFree(d_csrRowPtr));
+      CUDA_CHECK(cudaFree(d_csrColInd));
+      CUDA_CHECK(cudaFree(d_b));
+      CUDA_CHECK(cudaFree(d_x));
+
+      destroyConjugateGradientState(CGSolverState);
+
+      return;
+
+    } else if (solver_type_ == Parameters::CGChol) {
+
+      return;
+
+    } else if (solver_type_ == Parameters::CGBig) {
+
+      return;
+
+    } else {
+      return;
+    }
+  }
+
   void set_solver_type(Parameters::LinearSolverType type) {
     solver_type_ = type;
     if (solver_type_ == Parameters::LDLT) {
@@ -902,6 +951,7 @@ public:
 private:
   CuSolverState solverState;
   PreConjugateState preConjugatestate;
+  ConjugateGradientState CGSolverState;
 
   Parameters::LinearSolverType solver_type_;
   int n, nnz;

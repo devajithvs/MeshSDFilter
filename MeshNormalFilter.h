@@ -553,6 +553,9 @@ private:
       vtx_pos = sol.transpose();
       set_vertex_points(output_mesh, vtx_pos);
     }
+
+    linear_solver_.destroy();
+
     return true;
   }
 
