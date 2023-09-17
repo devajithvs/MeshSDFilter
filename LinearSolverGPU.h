@@ -696,23 +696,24 @@ public:
 
   // Initialize the solver with matrix
   bool compute(const SparseMatrixXd &M) {
+
+    n = M.rows();
+    nnz = M.nonZeros();
+
+    CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
+    CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
+
+    CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(), (n + 1) * sizeof(int),
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
+                          cudaMemcpyHostToDevice));
+
     if (solver_type_ == Parameters::LDLT) {
-      n = M.rows();
-      nnz = M.nonZeros();
-
-      CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
-
-      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
-                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
-                            cudaMemcpyHostToDevice));
-
       initializeCuSolverState(solverState);
 
       size_t size_chol = 0;
@@ -721,43 +722,11 @@ public:
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
-      n = M.rows();
-      nnz = M.nonZeros();
-
-      CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
-
-      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
-                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
-                            cudaMemcpyHostToDevice));
-
       initializeConjugateGradientState(n, nnz, d_csrRowPtr, d_csrColInd,
                                        d_csrVal, d_x, CGSolverState);
 
       return true;
     } else if (solver_type_ == Parameters::CGChol) {
-
-      n = M.rows();
-      nnz = M.nonZeros();
-
-      CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
-
-      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
-                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
-                            cudaMemcpyHostToDevice));
 
       // Create an IncompleteCholesky factorization object
       Eigen::IncompleteCholesky<double> ichol(M);
@@ -783,26 +752,11 @@ public:
       return true;
     } else if (solver_type_ == Parameters::CGBig) {
 
-      n = M.rows();
-      nnz = M.nonZeros();
-
-      CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
-      CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
-      CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
       cudaMemset(d_x, 0, n * sizeof(double));
 
       // Initialize the ConjugateState struct and perform factorization
       initializePreConjugateState(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal,
                                   preConjugatestate);
-
-      CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(),
-                            (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
-                            cudaMemcpyHostToDevice));
 
       generateILUFactors(preConjugatestate, n, nnz, d_csrRowPtr, d_csrColInd,
                          d_csrVal, d_b, d_x);
@@ -882,11 +836,6 @@ public:
         CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(double),
                               cudaMemcpyHostToDevice));
 
-        // Call the PCG solver function with the precomputed factorization
-        // generateILUFactors(preConjugatestate, n, nnz, d_csrRowPtr,
-        // d_csrColInd,
-        //                    d_csrVal, d_b, d_x);
-
         solveUsingPreconditionedConjugateGradient(preConjugatestate, n, nnz,
                                                   d_csrRowPtr, d_csrColInd,
                                                   d_csrVal, d_b, d_x);
@@ -911,31 +860,28 @@ public:
     // cleanupCuSolverState(solverState);
   }
 
+  void clear_memory() {
+    CUDA_CHECK(cudaFree(d_csrVal));
+    CUDA_CHECK(cudaFree(d_csrRowPtr));
+    CUDA_CHECK(cudaFree(d_csrColInd));
+    CUDA_CHECK(cudaFree(d_b));
+    CUDA_CHECK(cudaFree(d_x));
+  }
+
   void destroy() {
+    clear_memory();
     if (solver_type_ == Parameters::LDLT) {
-
       return;
-
     } else if (solver_type_ == Parameters::CG) {
-
-      CUDA_CHECK(cudaFree(d_csrVal));
-      CUDA_CHECK(cudaFree(d_csrRowPtr));
-      CUDA_CHECK(cudaFree(d_csrColInd));
-      CUDA_CHECK(cudaFree(d_b));
-      CUDA_CHECK(cudaFree(d_x));
-
       destroyConjugateGradientState(CGSolverState);
-
       return;
-
     } else if (solver_type_ == Parameters::CGChol) {
-
+      CUDA_CHECK(cudaFree(d_csrValL));
+      CUDA_CHECK(cudaFree(d_csrRowPtrL));
+      CUDA_CHECK(cudaFree(d_csrColIndL));
       return;
-
     } else if (solver_type_ == Parameters::CGBig) {
-
       return;
-
     } else {
       return;
     }
