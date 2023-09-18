@@ -697,21 +697,30 @@ public:
   // Initialize the solver with matrix
   bool compute(const SparseMatrixXd &M) {
 
-    n = M.rows();
-    nnz = M.nonZeros();
+    Eigen::AMDOrdering<int> ordering;
+    // ordering(M.selfadjointView<Eigen::Lower>(), perm);
+    ordering(M, perm);
 
+    SparseMatrixXd reorderedMatrix = M;
+    reorderedMatrix.makeCompressed();
+
+    // Applying the permutation to the matrix
+    reorderedMatrix = perm.transpose() * reorderedMatrix * perm;
+
+    n = reorderedMatrix.rows();
+    nnz = reorderedMatrix.nonZeros();
     CUDA_CHECK(cudaMalloc((void **)&d_csrVal, nnz * sizeof(double)));
     CUDA_CHECK(cudaMalloc((void **)&d_csrRowPtr, (n + 1) * sizeof(int)));
     CUDA_CHECK(cudaMalloc((void **)&d_csrColInd, nnz * sizeof(int)));
     CUDA_CHECK(cudaMalloc((void **)&d_b, n * sizeof(double)));
     CUDA_CHECK(cudaMalloc((void **)&d_x, n * sizeof(double)));
 
-    CUDA_CHECK(cudaMemcpy(d_csrVal, M.valuePtr(), nnz * sizeof(double),
-                          cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_csrRowPtr, M.outerIndexPtr(), (n + 1) * sizeof(int),
-                          cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_csrColInd, M.innerIndexPtr(), nnz * sizeof(int),
-                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_csrVal, reorderedMatrix.valuePtr(),
+                          nnz * sizeof(double), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_csrRowPtr, reorderedMatrix.outerIndexPtr(),
+                          (n + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_csrColInd, reorderedMatrix.innerIndexPtr(),
+                          nnz * sizeof(int), cudaMemcpyHostToDevice));
 
     if (solver_type_ == Parameters::LDLT) {
       initializeCuSolverState(solverState);
@@ -773,9 +782,10 @@ public:
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
-        const double *b_data = rhs.col(i).data();
 
-        CUDA_CHECK(cudaMemcpyAsync(d_b, b_data, n * sizeof(double),
+        Eigen::VectorXd b_prime = perm.transpose() * rhs.col(i);
+
+        CUDA_CHECK(cudaMemcpyAsync(d_b, b_prime.data(), n * sizeof(double),
                                    cudaMemcpyHostToDevice));
 
         solveLDLT(solverState, n, d_b, d_x);
@@ -784,6 +794,8 @@ public:
 
         CUDA_CHECK(cudaMemcpyAsync(sol.col(i).data(), d_x, n * sizeof(double),
                                    cudaMemcpyDeviceToHost));
+
+        sol.col(i) = perm * sol.col(i);
       }
 
       return true;
@@ -900,6 +912,9 @@ private:
   ConjugateGradientState CGSolverState;
 
   Parameters::LinearSolverType solver_type_;
+
+  Eigen::PermutationMatrix<Eigen::Dynamic, Eigen::Dynamic, int> perm;
+
   int n, nnz;
   double *d_csrVal, *d_b, *d_x;
   int *d_csrRowPtr, *d_csrColInd;
