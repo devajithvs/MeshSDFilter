@@ -224,19 +224,45 @@ __global__ void kernel_calculate_filtered_signals(
     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
 
-    double sum = 0.0;
-    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-      int neighbor_idx = dev_neighborhood_info[2 * j];
-      int coef_idx = dev_neighborhood_info[2 * j + 1];
+    // Calculate the maximum range of indices to access
+    int max_range = max(neighbor_info_end_idx - neighbor_info_start_idx, 1);
+
+    // Initialize local_data
+    double3 local_data = make_double3(0.0f, 0.0f, 0.0f);
+
+    for (int j = 0; j < max_range; ++j) {
+      int neighbor_idx =
+          dev_neighborhood_info[2 * (neighbor_info_start_idx + j)];
+      int coef_idx =
+          dev_neighborhood_info[2 * (neighbor_info_start_idx + j) + 1];
 
       double weight = dev_neighbor_pair_weights[coef_idx];
-      for (int k = 0; k < signal_dim; ++k) {
-        double neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
-        double weighted_value = neighbor_value * weight;
-        dev_filtered_signals[k + signal_dim * i] += weighted_value;
-      }
+
+      double3 neighbor_values;
+      neighbor_values.x = dev_signals[3 * neighbor_idx];
+      neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+      neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+
+      local_data.x += neighbor_values.x * weight;
+      local_data.y += neighbor_values.y * weight;
+      local_data.z += neighbor_values.z * weight;
     }
 
+    dev_filtered_signals[3 * i + 0] = local_data.x;
+    dev_filtered_signals[3 * i + 1] = local_data.y;
+    dev_filtered_signals[3 * i + 2] = local_data.z;
+  }
+}
+
+__global__ void kernel_calculate_filtered_signals2(
+    int signal_count, Eigen::Index signal_dim,
+    Eigen::Index *dev_neighborhood_info_boundaries,
+    Eigen::Index *dev_neighborhood_info, double *dev_neighbor_pair_weights,
+    double *dev_signals, double *dev_filtered_signals,
+    double *dev_weighted_init_signals) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < signal_count) {
+    double sum = 0.0;
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] +=
           dev_weighted_init_signals[i * signal_dim + k];
@@ -679,7 +705,13 @@ protected:
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
 
+      // Calculate the shared memory size per block
       kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
+          signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
+          dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
+          dev_filtered_signals, dev_weighted_init_signals);
+
+      kernel_calculate_filtered_signals2<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
           dev_filtered_signals, dev_weighted_init_signals);
