@@ -804,10 +804,13 @@ public:
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
-        CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(double),
+        Eigen::VectorXd b_prime = perm.transpose() * rhs.col(i);
+        Eigen::VectorXd sol_prime = perm.transpose() * sol.col(i);
+
+        CUDA_CHECK(cudaMemcpy(d_x, sol_prime.data(), n * sizeof(double),
                               cudaMemcpyHostToDevice));
 
-        CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(double),
+        CUDA_CHECK(cudaMemcpy(d_b, b_prime.data(), n * sizeof(double),
                               cudaMemcpyHostToDevice));
 
         solveUsingConjugateGradient(CGSolverState, n, nnz, d_csrRowPtr,
@@ -815,6 +818,8 @@ public:
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(double),
                               cudaMemcpyDeviceToHost));
+
+        sol.col(i) = perm * sol.col(i);
       }
       return true;
 
