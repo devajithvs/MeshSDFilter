@@ -213,6 +213,105 @@ __global__ void kernel_calculate_neighbor_pair_weights(
 //   }
 // }
 
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals,
+//     float *dev_weighted_init_signals) {
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i < signal_count) {
+//     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+//     for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+//       int neighbor_idx = dev_neighborhood_info[2 * j];
+//       int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+//       float weight = dev_neighbor_pair_weights[coef_idx];
+//       for (int k = 0; k < signal_dim; ++k) {
+//         float neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
+//         float weighted_value = neighbor_value * weight;
+//         dev_filtered_signals[k + signal_dim * i] += weighted_value;
+//       }
+//     }
+//   }
+// }
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals,
+//     float *dev_weighted_init_signals) {
+//     int i = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (i < signal_count) {
+//       // printf("%d\n", i);
+//       int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//       int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+//       // printf("%d,%d,%d\n", i, neighbor_info_start_idx, neighbor_info_end_idx);
+//       float3 local_data = make_float3(0.0f, 0.0f, 0.0f);
+
+//       for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+//         int neighbor_idx = dev_neighborhood_info[2 * j];
+//         int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+//         float weight = dev_neighbor_pair_weights[coef_idx];
+        
+//         float3 neighbor_values;
+//         neighbor_values.x = dev_signals[3 * neighbor_idx];
+//         neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+//         neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+        
+//         local_data.x += neighbor_values.x * weight;
+//         local_data.y += neighbor_values.y * weight;
+//         local_data.z += neighbor_values.z * weight;
+//       }
+
+//       dev_filtered_signals[3*i+0] = local_data.x;
+//       dev_filtered_signals[3*i+1] = local_data.y;
+//       dev_filtered_signals[3*i+2] = local_data.z;
+//     }
+//   }
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals,
+//     float *dev_weighted_init_signals) {
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i < signal_count) {
+//     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+//     float3 local_data = make_float3(0.0f, 0.0f, 0.0f);
+
+//     int num_iterations = neighbor_info_end_idx - neighbor_info_start_idx;
+//     int lane_id = threadIdx.x & 31; // Get the thread's lane ID within the warp
+    
+//     for (int j = lane_id; j < num_iterations; j += 32) {
+//       int neighbor_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j)];
+//       int coef_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j) + 1];
+
+//       // Load read-only data into registers
+//       float weight = dev_neighbor_pair_weights[coef_idx];
+
+//       float3 neighbor_values;
+//       neighbor_values.x = dev_signals[3 * neighbor_idx];
+//       neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+//       neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+
+//       local_data.x += neighbor_values.x * weight;
+//       local_data.y += neighbor_values.y * weight;
+//       local_data.z += neighbor_values.z * weight;
+//     }
+
+//     dev_filtered_signals[3*i+0] = local_data.x;
+//     dev_filtered_signals[3*i+1] = local_data.y;
+//     dev_filtered_signals[3*i+2] = local_data.z;
+//   }
+// }
+
 __global__ void kernel_calculate_filtered_signals(
     int signal_count, Eigen::Index signal_dim,
     Eigen::Index *dev_neighborhood_info_boundaries,
@@ -221,22 +320,155 @@ __global__ void kernel_calculate_filtered_signals(
     float *dev_weighted_init_signals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < signal_count) {
-    int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
-    int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+      int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+      int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
 
-    float sum = 0.0;
-    for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
-      int neighbor_idx = dev_neighborhood_info[2 * j];
-      int coef_idx = dev_neighborhood_info[2 * j + 1];
+      // Calculate the maximum range of indices to access
+      int max_range = max(neighbor_info_end_idx - neighbor_info_start_idx, 1);
 
-      float weight = dev_neighbor_pair_weights[coef_idx];
-      for (int k = 0; k < signal_dim; ++k) {
-        float neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
-        float weighted_value = neighbor_value * weight;
-        dev_filtered_signals[k + signal_dim * i] += weighted_value;
+      // Initialize local_data
+      float3 local_data = make_float3(0.0f, 0.0f, 0.0f);
+
+      for (int j = 0; j < max_range; ++j) {
+          int neighbor_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j)];
+          int coef_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j) + 1];
+
+          float weight = dev_neighbor_pair_weights[coef_idx];
+
+          float3 neighbor_values;
+          neighbor_values.x = dev_signals[3 * neighbor_idx];
+          neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+          neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+
+          local_data.x += neighbor_values.x * weight;
+          local_data.y += neighbor_values.y * weight;
+          local_data.z += neighbor_values.z * weight;
       }
-    }
 
+    dev_filtered_signals[3*i+0] = local_data.x;
+    dev_filtered_signals[3*i+1] = local_data.y;
+    dev_filtered_signals[3*i+2] = local_data.z;
+  }
+}
+
+#define TILE_SIZE 32  // Adjust the tile size as needed
+#define SHARED_MEMORY_SIZE 512  // Adjust the tile size as needed
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals,
+//     float *dev_weighted_init_signals) {
+//     int i = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (i < signal_count) {
+//         int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//         int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+//         // Calculate the maximum range of indices to access
+//         int max_range = max(neighbor_info_end_idx - neighbor_info_start_idx, 1);
+
+//         // Initialize local_data
+//         float3 local_data = make_float3(0.0f, 0.0f, 0.0f);
+
+//         for (int tile_start = 0; tile_start < max_range; tile_start += TILE_SIZE) {
+//             // for (int j = tile_start; j < min(tile_start + TILE_SIZE, max_range); ++j) {
+//             //     int neighbor_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j)];
+//             //     int coef_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j) + 1];
+
+//             //     float weight = dev_neighbor_pair_weights[coef_idx];
+
+//             //     float3 neighbor_values;
+//             //     neighbor_values.x = dev_signals[3 * neighbor_idx];
+//             //     neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+//             //     neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+
+//             //     local_data.x += neighbor_values.x * weight;
+//             //     local_data.y += neighbor_values.y * weight;
+//             //     local_data.z += neighbor_values.z * weight;
+//             // }
+//             #pragma unroll
+//             for (int j = tile_start; j < min(tile_start + TILE_SIZE, max_range); j += 1) {
+//                 int neighbor_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j)];
+//                 int coef_idx = dev_neighborhood_info[2 * (neighbor_info_start_idx + j) + 1];
+
+//                 float weight = dev_neighbor_pair_weights[coef_idx];
+
+//                 float3 neighbor_values;
+//                 neighbor_values.x = dev_signals[3 * neighbor_idx];
+//                 neighbor_values.y = dev_signals[3 * neighbor_idx + 1];
+//                 neighbor_values.z = dev_signals[3 * neighbor_idx + 2];
+
+//                 local_data.x += neighbor_values.x * weight;
+//                 local_data.y += neighbor_values.y * weight;
+//                 local_data.z += neighbor_values.z * weight;
+//             }
+
+//             // Synchronize threads within a warp before moving to the next tile
+//             __syncthreads();
+//         }
+
+//         // Use atomicAdd to accumulate results to global memory
+//         atomicAdd(&dev_filtered_signals[3 * i + 0], local_data.x);
+//         atomicAdd(&dev_filtered_signals[3 * i + 1], local_data.y);
+//         atomicAdd(&dev_filtered_signals[3 * i + 2], local_data.z);
+//     }
+// }
+
+// __global__ void kernel_calculate_filtered_signals(
+//     int signal_count, Eigen::Index signal_dim,
+//     Eigen::Index *dev_neighborhood_info_boundaries,
+//     Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+//     float *dev_signals, float *dev_filtered_signals,
+//     float *dev_weighted_init_signals) {
+//   int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+//   // Shared memory for caching neighbor data
+//   extern __shared__ float shared_data[];
+//   if (i < signal_count) {
+//     int neighbor_info_start_idx = dev_neighborhood_info_boundaries[i];
+//     int neighbor_info_end_idx = dev_neighborhood_info_boundaries[i + 1];
+
+//     // Each thread caches its signal and weights
+//     for (int k = threadIdx.x; k < signal_dim; k += blockDim.x) {
+//       shared_data[k] = dev_filtered_signals[k + signal_dim * i];
+//     }
+
+//     __syncthreads();
+
+//     // Compute filtered signal using shared memory
+//     for (int j = neighbor_info_start_idx; j < neighbor_info_end_idx; ++j) {
+//       int neighbor_idx = dev_neighborhood_info[2 * j];
+//       int coef_idx = dev_neighborhood_info[2 * j + 1];
+
+//       float weight = dev_neighbor_pair_weights[coef_idx];
+
+//       for (int k = threadIdx.x; k < signal_dim; k += blockDim.x) {
+//         float neighbor_value = dev_signals[k + signal_dim * neighbor_idx];
+//         float weighted_value = neighbor_value * weight;
+//         shared_data[k] += weighted_value;
+//       }
+//     }
+
+//     __syncthreads();
+
+//     // Update the filtered signals in global memory
+//     for (int k = threadIdx.x; k < signal_dim; k += blockDim.x) {
+//       dev_filtered_signals[k + signal_dim * i] = shared_data[k];
+//     }
+//   }
+// }
+
+
+__global__ void kernel_calculate_filtered_signals2(
+    int signal_count, Eigen::Index signal_dim,
+    Eigen::Index *dev_neighborhood_info_boundaries,
+    Eigen::Index *dev_neighborhood_info, float *dev_neighbor_pair_weights,
+    float *dev_signals, float *dev_filtered_signals,
+    float *dev_weighted_init_signals) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < signal_count) {
+    float sum = 0.0;
     for (int k = 0; k < signal_dim; ++k) {
       dev_filtered_signals[i * signal_dim + k] +=
           dev_weighted_init_signals[i * signal_dim + k];
@@ -677,11 +909,27 @@ protected:
           n_neighbor_pairs, signals_.rows(), h, dev_neighboring_pairs,
           dev_precomputed_area_spatial_guidance_weights, dev_signals,
           dev_neighbor_pair_weights);
+      cudaDeviceSynchronize();
 
-      kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
+      // Calculate the shared memory size per block
+      size_t shared_memory_size = signal_count_ * sizeof(float); // Each thread uses 2 * signal_dim floats
+      // printf("\n\n\n\n");
+      // printf("Starting iter");
+      // printf("\n\n\n\n");
+      kernel_calculate_filtered_signals<<<grid_size_filtered, block_size, SHARED_MEMORY_SIZE>>>(
+      // kernel_calculate_filtered_signals<<<grid_size_filtered, block_size>>>(
           signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
           dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
           dev_filtered_signals, dev_weighted_init_signals);
+
+      cudaDeviceSynchronize();
+
+      kernel_calculate_filtered_signals2<<<grid_size_filtered, block_size>>>(
+          signal_count_, signal_dim_, dev_neighborhood_info_boundaries,
+          dev_neighborhood_info, dev_neighbor_pair_weights, dev_signals,
+          dev_filtered_signals, dev_weighted_init_signals);
+      
+      cudaDeviceSynchronize();
 
       // kernel_calculate_var_disp_sqrnorm<<<grid_size_filtered, block_size>>>(
       kernel_calculate_var_disp_sqrnorm_opt<<<grid_size_sqrnorm,
@@ -689,6 +937,8 @@ protected:
           signal_count_, signal_dim_, dev_filtered_signals, dev_signals,
           dev_area_weights, dev_var_disp_sqrnorm);
 
+      cudaDeviceSynchronize();
+  
       float var_disp_sqrnorm;
       cudaMemcpy(&var_disp_sqrnorm, dev_var_disp_sqrnorm, sizeof(float),
                  cudaMemcpyDeviceToHost);
