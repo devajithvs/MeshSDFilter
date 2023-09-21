@@ -232,7 +232,7 @@ void solveUsingPreconditionedConjugateGradient(
     cublasSaxpy(cublasHandle, N, &nalpha, state.d_omega, 1, d_r, 1);
     cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
   }
-  printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
+  // printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
 
   // if (state.matA) {
   //   cusparseDestroySpMat(state.matA);
@@ -465,7 +465,7 @@ void solveUsingPreconditionedConjugateGradient0(
     cudaDeviceSynchronize();
     k++;
   }
-  printf("iteration = %3d, residual = %e\n", k, sqrt(rho));
+  // printf("iteration = %3d, residual = %e\n", k, sqrt(rho));
 }
 
 struct ConjugateGradientState {
@@ -765,10 +765,10 @@ public:
     } else if (solver_type_ == Parameters::CGChol) {
 
       // Create an IncompleteCholesky factorization object
-      Eigen::IncompleteCholesky<float> ichol(M);
+      Eigen::IncompleteCholesky<float> ichol(reorderedMatrix);
 
       // Perform the incomplete Cholesky factorization
-      ichol.compute(M);
+      ichol.compute(reorderedMatrix);
       Eigen::SparseMatrix<float> symbolicL = ichol.matrixL();
       float *valuePtrL = symbolicL.valuePtr();
       int *csrRowPtrL = symbolicL.outerIndexPtr();
@@ -859,10 +859,13 @@ public:
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
-        CUDA_CHECK(cudaMemcpy(d_x, sol.col(i).data(), n * sizeof(float),
+        Eigen::VectorXf b_prime = perm.transpose() * rhs.col(i);
+        Eigen::VectorXf sol_prime = perm.transpose() * sol.col(i);
+
+        CUDA_CHECK(cudaMemcpy(d_x, sol_prime.data(), n * sizeof(float),
                               cudaMemcpyHostToDevice));
 
-        CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(float),
+        CUDA_CHECK(cudaMemcpy(d_b, b_prime.data(), n * sizeof(float),
                               cudaMemcpyHostToDevice));
 
         solveUsingPreconditionedConjugateGradient0(
@@ -871,6 +874,8 @@ public:
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(float),
                               cudaMemcpyDeviceToHost));
+
+        sol.col(i) = perm * sol.col(i);
       }
       return true;
 
@@ -880,8 +885,13 @@ public:
 
       for (int i = 0; i < n_cols; ++i) {
         cudaMemset(d_x, 0, n * sizeof(float));
+        Eigen::VectorXf b_prime = perm.transpose() * rhs.col(i);
+        // Eigen::VectorXf sol_prime = perm.transpose() * sol.col(i);
 
-        CUDA_CHECK(cudaMemcpy(d_b, rhs.col(i).data(), n * sizeof(float),
+        // CUDA_CHECK(cudaMemcpy(d_x, sol_prime.data(), n * sizeof(float),
+        //                       cudaMemcpyHostToDevice));
+
+        CUDA_CHECK(cudaMemcpy(d_b, b_prime.data(), n * sizeof(float),
                               cudaMemcpyHostToDevice));
 
         solveUsingPreconditionedConjugateGradient(preConjugatestate, n, nnz,
@@ -890,6 +900,8 @@ public:
 
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(float),
                               cudaMemcpyDeviceToHost));
+
+        sol.col(i) = perm * sol.col(i);
       }
       return true;
 

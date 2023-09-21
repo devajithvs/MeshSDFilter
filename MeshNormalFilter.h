@@ -105,7 +105,7 @@ class MeshNormalFilter : public SDFilter {
 public:
   MeshNormalFilter(const TriMesh &mesh)
       : mesh_(mesh), print_error_evaluation_(false),
-        linear_solver_(Parameters::CG), system_matrix_factorized_(false) {}
+        linear_solver_(Parameters::CGBig), system_matrix_factorized_(false) {}
 
   virtual ~MeshNormalFilter() {}
 
