@@ -752,9 +752,9 @@ public:
     if (solver_type_ == Parameters::LDLT) {
       initializeCuSolverState(solverState);
 
-      // size_t size_chol = 0;
-      // factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
-      //           d_csrVal);
+      size_t size_chol = 0;
+      factorize(solverState, size_chol, n, nnz, d_csrRowPtr, d_csrColInd,
+                d_csrVal);
       return true;
     } else if (solver_type_ == Parameters::CG) {
 
@@ -819,9 +819,9 @@ public:
         CUDA_CHECK(cudaMemcpyAsync(d_b, b_prime.data(), n * sizeof(float),
                                    cudaMemcpyHostToDevice));
 
-        // solveLDLT(solverState, n, d_b, d_x);
-        solveUsingCusolver(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
-        d_x);
+        solveLDLT(solverState, n, d_b, d_x);
+        // solveUsingCusolver(n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_b,
+        // d_x);
 
         CUDA_CHECK(cudaMemcpyAsync(sol.col(i).data(), d_x, n * sizeof(float),
                                    cudaMemcpyDeviceToHost));
