@@ -105,7 +105,7 @@ class MeshNormalFilter : public SDFilter {
 public:
   MeshNormalFilter(const TriMesh &mesh)
       : mesh_(mesh), print_error_evaluation_(false),
-        linear_solver_(Parameters::LDLT), system_matrix_factorized_(false) {}
+        linear_solver_(Parameters::CG), system_matrix_factorized_(false) {}
 
   virtual ~MeshNormalFilter() {}
 
@@ -372,8 +372,8 @@ private:
   // We precompute matrix A^T, and pre-factorize A^T A + w I
   // LinearSolver linear_solver_; // Linear system solver for mesh update
 
-  // LinearSolverCPU linear_solver_;
-  LinearSolverGPU linear_solver_;
+  LinearSolverCPU linear_solver_;
+  // LinearSolverGPU linear_solver_;
   SparseMatrixXf At_; // Transpose of part of the linear least squares matrix
                       // that corresponds to mean centering of face vertices
   bool system_matrix_factorized_; // Whether the matrix
