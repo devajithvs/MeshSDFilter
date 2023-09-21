@@ -287,18 +287,12 @@ struct PreCholConjugateGradientState {
   cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
   cusparseFillMode_t fill_upper = CUSPARSE_FILL_MODE_UPPER;
   cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
-
-  void *d_bufferL, *d_bufferU;
-  size_t bufferSizeL, bufferSizeU;
-  cusparseSpSVDescr_t spsvDescrL, spsvDescrU;
-  void *buffer = NULL;
 };
 
 // Function to initialize PreCholConjugateGradientState
 void initializePreCholConjugateGradientState(
     int N, int nz, int *d_csrRowPtr, int *d_csrColInd, float *d_csrVal,
-    int *d_csrRowPtrL, int *d_csrColIndL, float *d_csrValL, float *d_x,
-    float *d_b, PreCholConjugateGradientState &state) {
+    float *d_x, float *d_b, PreCholConjugateGradientState &state) {
   cublasCreate(&state.cublasHandle);
   cusparseCreate(&state.cusparseHandle);
 
@@ -320,60 +314,6 @@ void initializePreCholConjugateGradientState(
   cusparseCreateDnVec(&state.vecy, N, state.d_y, CUDA_R_32F);
 
   cusparseCreateDnVec(&state.vecR, N, state.d_b, CUDA_R_32F);
-
-  // Lower Part
-  cusparseCreateCsr(&state.matM_lower, N, N, nz, d_csrRowPtrL, d_csrColIndL,
-                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
-  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_FILL_MODE,
-                            &state.fill_lower, sizeof(state.fill_lower));
-  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_DIAG_TYPE,
-                            &state.diag_unit, sizeof(state.diag_unit));
-
-  // M_upper
-  cusparseCreateCsr(&state.matM_upper, N, N, nz, d_csrRowPtrL, d_csrColIndL,
-                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
-  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_FILL_MODE,
-                            &state.fill_upper, sizeof(state.fill_upper));
-  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
-                            &state.diag_non_unit, sizeof(state.diag_non_unit));
-
-  float beta = 0.0;
-  float alpha = 1.0;
-  /* Allocate workspace for cuSPARSE */
-  cusparseSpSV_createDescr(&state.spsvDescrL);
-  cusparseSpSV_bufferSize(
-      state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
-      state.matM_lower, state.vecR, state.vecx, CUDA_R_32F,
-      CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL, &state.bufferSizeL);
-  cudaMalloc(&state.d_bufferL, state.bufferSizeL);
-
-  cusparseSpSV_createDescr(&state.spsvDescrU);
-  cusparseSpSV_bufferSize(
-      state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
-      state.matM_upper, state.vecR, state.vecx, CUDA_R_32F,
-      CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrU, &state.bufferSizeU);
-  cudaMalloc(&state.d_bufferU, state.bufferSizeU);
-
-  /* perform triangular solve analysis */
-  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &alpha, state.matM_lower, state.vecR, state.vecx,
-                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL,
-                        state.d_bufferL);
-
-  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &alpha, state.matM_upper, state.vecR, state.vecx,
-                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrU,
-                        state.d_bufferU);
-
-  /* Allocate workspace for cuSPARSE */
-  size_t bufferSize = 0;
-  cusparseSpMV_bufferSize(state.cusparseHandle,
-                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, state.matA,
-                          state.vecx, &beta, state.vecy, CUDA_R_32F,
-                          CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
-  cudaMalloc(&state.buffer, bufferSize);
 }
 
 void destroyPreCholConjugateGradientState(
@@ -414,10 +354,67 @@ void solveUsingPreconditionedConjugateGradient0(
 
   float rhop = 0.0;
 
+  // Lower Part
+  cusparseCreateCsr(&state.matM_lower, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_FILL_MODE,
+                            &state.fill_lower, sizeof(state.fill_lower));
+  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_DIAG_TYPE,
+                            &state.diag_unit, sizeof(state.diag_unit));
+
+  // M_upper
+  cusparseCreateCsr(&state.matM_upper, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+                    d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_FILL_MODE,
+                            &state.fill_upper, sizeof(state.fill_upper));
+  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
+                            &state.diag_non_unit, sizeof(state.diag_non_unit));
+
+  void *d_bufferL, *d_bufferU;
+  size_t bufferSizeL, bufferSizeU;
+  cusparseSpSVDescr_t spsvDescrL, spsvDescrU;
+
+  /* Allocate workspace for cuSPARSE */
+  cusparseSpSV_createDescr(&spsvDescrL);
+  cusparseSpSV_bufferSize(state.cusparseHandle,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+                          state.matM_lower, state.vecR, state.vecx, CUDA_R_32F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, &bufferSizeL);
+  cudaMalloc(&d_bufferL, bufferSizeL);
+
+  cusparseSpSV_createDescr(&spsvDescrU);
+  cusparseSpSV_bufferSize(state.cusparseHandle,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
+                          state.matM_upper, state.vecR, state.vecx, CUDA_R_32F,
+                          CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, &bufferSizeU);
+  cudaMalloc(&d_bufferU, bufferSizeU);
+
+  /* perform triangular solve analysis */
+  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &alpha, state.matM_lower, state.vecR, state.vecx,
+                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL,
+                        d_bufferL);
+
+  cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+                        &alpha, state.matM_upper, state.vecR, state.vecx,
+                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU,
+                        d_bufferU);
+
+  /* Allocate workspace for cuSPARSE */
+  size_t bufferSize = 0;
+  cusparseSpMV_bufferSize(state.cusparseHandle,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, state.matA,
+                          state.vecx, &beta, state.vecy, CUDA_R_32F,
+                          CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
+  void *buffer = NULL;
+  cudaMalloc(&buffer, bufferSize);
+
   // Start CG algorithm
   cusparseSpMV(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
                state.matA, state.vecx, &beta, state.vecy, CUDA_R_32F,
-               CUSPARSE_SPMV_ALG_DEFAULT, state.buffer);
+               CUSPARSE_SPMV_ALG_DEFAULT, buffer);
 
   cublasSaxpy(state.cublasHandle, N, &alpham1, state.d_y, 1, d_b, 1);
   blasStatus = cublasSdot(state.cublasHandle, N, d_b, 1, d_b, 1, &rho);
@@ -437,11 +434,11 @@ void solveUsingPreconditionedConjugateGradient0(
 
     cusparseSpSV_solve(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                        &alpha, state.matM_lower, state.vecR, vect, CUDA_R_32F,
-                       CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrL);
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL);
 
     cusparseSpSV_solve(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                        &alpha, state.matM_upper, vect, vecZ, CUDA_R_32F,
-                       CUSPARSE_SPSV_ALG_DEFAULT, state.spsvDescrU);
+                       CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU);
 
     rhop = rho;
     blasStatus = cublasSdot(state.cublasHandle, N, d_b, 1, d_z, 1, &rho);
@@ -458,7 +455,7 @@ void solveUsingPreconditionedConjugateGradient0(
 
     cusparseSpMV(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
                  state.matA, state.vecp, &beta, state.vecy, CUDA_R_32F,
-                 CUSPARSE_SPMV_ALG_DEFAULT, state.buffer);
+                 CUSPARSE_SPMV_ALG_DEFAULT, buffer);
     blasStatus =
         cublasSdot(state.cublasHandle, N, state.d_p, 1, state.d_y, 1, &temp);
     a = rho / temp;
@@ -790,9 +787,9 @@ public:
       CUDA_CHECK(cudaMemcpy(d_csrColIndL, csrColIndL, nnz * sizeof(int),
                             cudaMemcpyHostToDevice));
 
-      initializePreCholConjugateGradientState(
-          n, nnz, d_csrRowPtr, d_csrColInd, d_csrVal, d_csrRowPtrL,
-          d_csrColIndL, d_csrValL, d_x, d_b, preCholConjugateGradientState);
+      initializePreCholConjugateGradientState(n, nnz, d_csrRowPtr, d_csrColInd,
+                                              d_csrVal, d_x, d_b,
+                                              preCholConjugateGradientState);
 
       return true;
     } else if (solver_type_ == Parameters::CGBig) {
