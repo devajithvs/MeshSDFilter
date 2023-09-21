@@ -980,12 +980,28 @@ public:
 
       return check_error(LDLT_solver_, "LDLT solve failed");
     } else if (solver_type_ == Parameters::CG) {
-      sol = CG_solver_.solve(rhs);
+#ifdef USE_OPENMP
+      int n_cols = rhs.cols();
+
+      OMP_PARALLEL {
+        OMP_FOR
+        for (int i = 0; i < n_cols; ++i) {
+          // sol.col(i) = CG_solver_.solve(rhs.col(i));
+          sol.col(i) = CG_solver_.solveWithGuess(rhs.col(i), sol.col(i));
+        }
+      }
+#else
+      // sol = CG_solver_.solve(rhs);
+      sol = CG_solver_.solveWithGuess(rhs, sol);
+#endif
+      // sol = CG_solver_.solve(rhs);
       return check_error(CG_solver_, "CG solve failed");
     } else {
       return false;
     }
   }
+
+  void destroy() {}
 
   void reset_pattern() { pattern_analyzed = false; }
 
