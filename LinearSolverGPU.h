@@ -279,14 +279,6 @@ struct PreCholConjugateGradientState {
   cusparseDnVecDescr_t vecp = NULL;
   cusparseDnVecDescr_t vecy = NULL;
   cusparseDnVecDescr_t vecR = NULL;
-
-  cusparseSpMatDescr_t matM_upper = NULL;
-  cusparseSpMatDescr_t matM_lower = NULL;
-
-  cusparseFillMode_t fill_lower = CUSPARSE_FILL_MODE_LOWER;
-  cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
-  cusparseFillMode_t fill_upper = CUSPARSE_FILL_MODE_UPPER;
-  cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
 };
 
 // Function to initialize PreCholConjugateGradientState
@@ -354,23 +346,31 @@ void solveUsingPreconditionedConjugateGradient0(
 
   float rhop = 0.0;
 
+  cusparseSpMatDescr_t matM_upper;
+  cusparseSpMatDescr_t matM_lower;
+
+  cusparseFillMode_t fill_lower = CUSPARSE_FILL_MODE_LOWER;
+  cusparseDiagType_t diag_unit = CUSPARSE_DIAG_TYPE_UNIT;
+  cusparseFillMode_t fill_upper = CUSPARSE_FILL_MODE_UPPER;
+  cusparseDiagType_t diag_non_unit = CUSPARSE_DIAG_TYPE_NON_UNIT;
+
   // Lower Part
-  cusparseCreateCsr(&state.matM_lower, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+  cusparseCreateCsr(&matM_lower, N, N, nz, d_csrRowPtrL, d_csrColIndL,
                     d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                     CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
-  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_FILL_MODE,
-                            &state.fill_lower, sizeof(state.fill_lower));
-  cusparseSpMatSetAttribute(state.matM_lower, CUSPARSE_SPMAT_DIAG_TYPE,
-                            &state.diag_unit, sizeof(state.diag_unit));
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_FILL_MODE, &fill_lower,
+                            sizeof(fill_lower));
+  cusparseSpMatSetAttribute(matM_lower, CUSPARSE_SPMAT_DIAG_TYPE, &diag_unit,
+                            sizeof(diag_unit));
 
   // M_upper
-  cusparseCreateCsr(&state.matM_upper, N, N, nz, d_csrRowPtrL, d_csrColIndL,
+  cusparseCreateCsr(&matM_upper, N, N, nz, d_csrRowPtrL, d_csrColIndL,
                     d_csrValL, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                     CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
-  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_FILL_MODE,
-                            &state.fill_upper, sizeof(state.fill_upper));
-  cusparseSpMatSetAttribute(state.matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
-                            &state.diag_non_unit, sizeof(state.diag_non_unit));
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_FILL_MODE, &fill_upper,
+                            sizeof(fill_upper));
+  cusparseSpMatSetAttribute(matM_upper, CUSPARSE_SPMAT_DIAG_TYPE,
+                            &diag_non_unit, sizeof(diag_non_unit));
 
   void *d_bufferL, *d_bufferU;
   size_t bufferSizeL, bufferSizeU;
@@ -379,28 +379,26 @@ void solveUsingPreconditionedConjugateGradient0(
   /* Allocate workspace for cuSPARSE */
   cusparseSpSV_createDescr(&spsvDescrL);
   cusparseSpSV_bufferSize(state.cusparseHandle,
-                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
-                          state.matM_lower, state.vecR, state.vecx, CUDA_R_32F,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matM_lower,
+                          state.vecR, state.vecx, CUDA_R_32F,
                           CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, &bufferSizeL);
   cudaMalloc(&d_bufferL, bufferSizeL);
 
   cusparseSpSV_createDescr(&spsvDescrU);
   cusparseSpSV_bufferSize(state.cusparseHandle,
-                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha,
-                          state.matM_upper, state.vecR, state.vecx, CUDA_R_32F,
+                          CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matM_upper,
+                          state.vecR, state.vecx, CUDA_R_32F,
                           CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, &bufferSizeU);
   cudaMalloc(&d_bufferU, bufferSizeU);
 
   /* perform triangular solve analysis */
   cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &alpha, state.matM_lower, state.vecR, state.vecx,
-                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL,
-                        d_bufferL);
+                        &alpha, matM_lower, state.vecR, state.vecx, CUDA_R_32F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL, d_bufferL);
 
   cusparseSpSV_analysis(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                        &alpha, state.matM_upper, state.vecR, state.vecx,
-                        CUDA_R_32F, CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU,
-                        d_bufferU);
+                        &alpha, matM_upper, state.vecR, state.vecx, CUDA_R_32F,
+                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU, d_bufferU);
 
   /* Allocate workspace for cuSPARSE */
   size_t bufferSize = 0;
@@ -433,11 +431,11 @@ void solveUsingPreconditionedConjugateGradient0(
   while (rho > tol * tol && k < max_iter) {
 
     cusparseSpSV_solve(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                       &alpha, state.matM_lower, state.vecR, vect, CUDA_R_32F,
+                       &alpha, matM_lower, state.vecR, vect, CUDA_R_32F,
                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrL);
 
     cusparseSpSV_solve(state.cusparseHandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-                       &alpha, state.matM_upper, vect, vecZ, CUDA_R_32F,
+                       &alpha, matM_upper, vect, vecZ, CUDA_R_32F,
                        CUSPARSE_SPSV_ALG_DEFAULT, spsvDescrU);
 
     rhop = rho;
