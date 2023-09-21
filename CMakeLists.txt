@@ -97,7 +97,9 @@ add_executable(MeshSDFilter
   MeshNormalFilter.h
   MeshSDFilter.cu
 )
-target_compile_options(MeshSDFilter PRIVATE -g)
+
+target_compile_options(MeshSDFilter PRIVATE -O3)
+target_compile_options(MeshSDFilter PRIVATE -use_fast_math)
 target_link_libraries(MeshSDFilter
     MeshSDLibrary
     ${CUDA_LIBRARIES}
@@ -118,7 +120,9 @@ add_executable(MeshDenoiser
   MeshNormalDenoising.h
   MeshDenoiser.cu
 )
-target_compile_options(MeshDenoiser PRIVATE -g)
+
+target_compile_options(MeshDenoiser PRIVATE -O3)
+target_compile_options(MeshDenoiser PRIVATE -use_fast_math)
 target_link_libraries(MeshDenoiser
     MeshSDLibrary 
     ${CUDA_LIBRARIES} 
