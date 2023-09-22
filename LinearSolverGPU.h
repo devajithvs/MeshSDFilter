@@ -232,7 +232,7 @@ void solveUsingPreconditionedConjugateGradient(
     cublasSaxpy(cublasHandle, N, &nalpha, state.d_omega, 1, d_r, 1);
     cublasSdot(cublasHandle, N, d_r, 1, d_r, 1, &r1);
   }
-  // printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
+  printf("  iteration = %3d, residual = %e \n", k, sqrt(r1));
 
   // if (state.matA) {
   //   cusparseDestroySpMat(state.matA);
@@ -465,7 +465,7 @@ void solveUsingPreconditionedConjugateGradient0(
     cudaDeviceSynchronize();
     k++;
   }
-  // printf("iteration = %3d, residual = %e\n", k, sqrt(rho));
+  printf("iteration = %3d, residual = %e\n", k, sqrt(rho));
 }
 
 struct ConjugateGradientState {
@@ -584,7 +584,7 @@ void solveUsingConjugateGradient(ConjugateGradientState &state, int N, int nz,
     cudaDeviceSynchronize();
     k++;
   }
-  // printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
+  printf("iteration = %3d, residual = %e\n", k, sqrt(r1));
 }
 
 struct CuSolverState {
@@ -724,15 +724,15 @@ public:
   // Initialize the solver with matrix
   bool compute(const SparseMatrixXf &M) {
 
-    Eigen::AMDOrdering<int> ordering;
-    // ordering(M.selfadjointView<Eigen::Lower>(), perm);
-    ordering(M, perm);
+    // Eigen::AMDOrdering<int> ordering;
+    // // ordering(M.selfadjointView<Eigen::Lower>(), perm);
+    // ordering(M, perm);
 
     SparseMatrixXf reorderedMatrix = M;
     reorderedMatrix.makeCompressed();
 
     // Applying the permutation to the matrix
-    reorderedMatrix = perm.transpose() * reorderedMatrix * perm;
+    // reorderedMatrix = perm.transpose() * reorderedMatrix * perm;
 
     n = reorderedMatrix.rows();
     nnz = reorderedMatrix.nonZeros();
@@ -770,6 +770,35 @@ public:
       // Perform the incomplete Cholesky factorization
       ichol.compute(reorderedMatrix);
       Eigen::SparseMatrix<float> symbolicL = ichol.matrixL();
+
+      Eigen::SparseMatrix<float> symbolicM = symbolicL * symbolicL.transpose();
+
+      // Open files to write
+      std::ofstream fileL("sparsity_pattern_Lnormal.csv");
+      std::ofstream fileM("sparsity_pattern_Mnormal.csv");
+
+      // Loop over the non-zero entries of L and write the row and column
+      // indices to the file
+      for (int k = 0; k < symbolicL.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<float>::InnerIterator it(symbolicL, k); it;
+             ++it) {
+          fileL << it.row() << "," << it.col() << "\n";
+        }
+      }
+
+      // Loop over the non-zero entries of M and write the row and column
+      // indices to the file
+      for (int k = 0; k < symbolicM.outerSize(); ++k) {
+        for (Eigen::SparseMatrix<float>::InnerIterator it(symbolicM, k); it;
+             ++it) {
+          fileM << it.row() << "," << it.col() << "\n";
+        }
+      }
+
+      // Close the files
+      fileL.close();
+      fileM.close();
+
       float *valuePtrL = symbolicL.valuePtr();
       int *csrRowPtrL = symbolicL.outerIndexPtr();
       int *csrColIndL = symbolicL.innerIndexPtr();
@@ -859,11 +888,12 @@ public:
       int n_cols = rhs.cols();
 
       for (int i = 0; i < n_cols; ++i) {
-        Eigen::VectorXf b_prime = perm.transpose() * rhs.col(i);
-        Eigen::VectorXf sol_prime = perm.transpose() * sol.col(i);
+        Eigen::VectorXf b_prime = rhs.col(i);
+        cudaMemset(d_x, 0, n * sizeof(float));
+        // Eigen::VectorXf sol_prime = perm.transpose() * sol.col(i);
 
-        CUDA_CHECK(cudaMemcpy(d_x, sol_prime.data(), n * sizeof(float),
-                              cudaMemcpyHostToDevice));
+        // CUDA_CHECK(cudaMemcpy(d_x, sol_prime.data(), n * sizeof(float),
+        //                       cudaMemcpyHostToDevice));
 
         CUDA_CHECK(cudaMemcpy(d_b, b_prime.data(), n * sizeof(float),
                               cudaMemcpyHostToDevice));
@@ -875,7 +905,7 @@ public:
         CUDA_CHECK(cudaMemcpy(sol.col(i).data(), d_x, n * sizeof(float),
                               cudaMemcpyDeviceToHost));
 
-        sol.col(i) = perm * sol.col(i);
+        // sol.col(i) = perm * sol.col(i);
       }
       return true;
 
