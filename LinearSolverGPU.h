@@ -765,7 +765,8 @@ public:
     } else if (solver_type_ == Parameters::CGChol) {
 
       // Create an IncompleteCholesky factorization object
-      Eigen::IncompleteCholesky<float> ichol(reorderedMatrix);
+      Eigen::IncompleteCholesky<float, Eigen::Lower, Eigen::NaturalOrdering<int>> ichol(reorderedMatrix);
+      // Eigen::IncompleteCholesky<float> ichol(reorderedMatrix);
 
       // Perform the incomplete Cholesky factorization
       ichol.compute(reorderedMatrix);
